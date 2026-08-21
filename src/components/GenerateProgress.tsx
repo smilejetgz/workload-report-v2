@@ -30,14 +30,15 @@ export function GenerateProgress({
   isRunning,
   onCancel,
 }: {
-  run: Run;
+  /** null while the run is being created — there is nothing to read yet. */
+  run: Run | null;
   isRunning: boolean;
   onCancel: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(true);
   const [tab, setTab] = useState<"log" | "days">("log");
   const logEnd = useRef<HTMLDivElement>(null);
-  const progress = run.progress;
+  const progress = run?.progress ?? null;
   const lines = progress?.log ?? [];
 
   // Follow the newest line the way a terminal does.
@@ -45,11 +46,9 @@ export function GenerateProgress({
     if (isOpen && tab === "log") logEnd.current?.scrollIntoView({ block: "nearest" });
   }, [lines.length, isOpen, tab]);
 
-  if (!progress) return null;
-
-  const isSyncing = progress.phase === "sync";
-  const days = Object.entries(progress.dayStatus).sort(([a], [b]) => a.localeCompare(b));
-  const pct = progress.total > 0 ? (progress.completed / progress.total) * 100 : 0;
+  const isSyncing = !progress || progress.phase === "sync";
+  const days = Object.entries(progress?.dayStatus ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  const pct = progress?.total ? (progress.completed / progress.total) * 100 : 0;
 
   return (
     <aside
@@ -60,18 +59,20 @@ export function GenerateProgress({
         {isRunning ? (
           <Spinner className="text-accent" />
         ) : (
-          <span className={`size-2 rounded-full ${run.status === "failed" ? "bg-danger" : "bg-ok"}`} />
+          <span
+            className={`size-2 rounded-full ${run?.status === "failed" ? "bg-danger" : "bg-ok"}`}
+          />
         )}
         <span className="text-[13px] font-medium">
           {!isRunning
-            ? run.status === "failed"
+            ? run?.status === "failed"
               ? "รอบที่แล้วไม่สำเร็จ"
               : "รอบที่แล้วเสร็จแล้ว"
             : isSyncing
               ? "กำลังอ่านหลักฐาน"
               : "AI กำลังเขียนรายงาน"}
         </span>
-        {progress.total > 0 && (
+        {progress && progress.total > 0 && (
           <span className="font-mono text-[12px] tabular-nums text-muted">
             {progress.completed}/{progress.total}
           </span>
@@ -112,7 +113,9 @@ export function GenerateProgress({
 
           {tab === "log" ? (
             <div className="max-h-64 overflow-y-auto px-2.5 py-2 text-[12px] leading-relaxed">
-              {lines.length === 0 && <p className="text-muted">ยังไม่มีบันทึก</p>}
+              {lines.length === 0 && (
+                <p className="text-muted">{isRunning ? "กำลังเริ่ม" : "ยังไม่มีบันทึก"}</p>
+              )}
               {lines.map((line, i) => (
                 <p key={i} className={`flex gap-1.5 ${LEVEL_STYLE[line.level] ?? ""}`}>
                   <span className="shrink-0 font-mono opacity-50">

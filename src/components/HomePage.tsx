@@ -226,6 +226,16 @@ export function HomePage() {
     onError: (error) => setNotice({ kind: "error", text: (error as Error).message }),
   });
 
+  // From the click until the server answers and the first run poll lands there
+  // is a gap — a second or two, longer when the route still has to compile —
+  // during which nothing on screen moved. These treat that gap as part of the
+  // run so the button, the window and every day row react immediately.
+  const isStarting = generate.isPending;
+  const runActive = isGenerating || isStarting;
+  const runPhase = isStarting ? ("sync" as const) : run?.progress?.phase;
+  const dayRunStatus = (date: string) =>
+    isStarting ? "pending" : run?.progress?.dayStatus[date];
+
   const data = cardsQuery.data;
   const cardsByDate = new Map<string, NonNullable<typeof data>["cards"]>();
   for (const card of data?.cards ?? []) {
@@ -330,10 +340,10 @@ export function HomePage() {
             variant="primary"
             size="lg"
             className="ml-auto"
-            disabled={isGenerating || generate.isPending}
+            disabled={runActive}
             onClick={() => generate.mutate(undefined)}
           >
-            {isGenerating && <Spinner />} สร้างรายงาน
+            {runActive && <Spinner />} สร้างรายงาน
           </Button>
         </div>
       </section>
@@ -419,9 +429,9 @@ export function HomePage() {
             day={day}
             cards={cardsByDate.get(day.date) ?? []}
             taskTypes={taskTypesQuery.data?.taskTypes ?? []}
-            runActive={isGenerating}
-            runPhase={run?.progress?.phase}
-            runStatus={run?.progress?.dayStatus[day.date]}
+            runActive={runActive}
+            runPhase={runPhase}
+            runStatus={dayRunStatus(day.date)}
             onRegenerate={(date) => generate.mutate([date])}
           />
         ))}
@@ -506,10 +516,10 @@ export function HomePage() {
         </div>
       )}
 
-      {run && (isGenerating || showLastRunLog) && (
+      {(runActive || (run && showLastRunLog)) && (
         <GenerateProgress
-          run={run}
-          isRunning={isGenerating}
+          run={isStarting ? null : run}
+          isRunning={runActive}
           onCancel={() => activeRunId && api.runAction(activeRunId, "cancel")}
         />
       )}
