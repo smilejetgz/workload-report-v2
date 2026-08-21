@@ -386,6 +386,44 @@ describe("executeRun (integration, FakeProvider)", () => {
     expect(finished.error).not.toContain('"is_error"');
   }, 120_000);
 
+  // The rows must have something to show from the first moment, not only once
+  // the evidence phase is over: a run that dies during sync still has to leave
+  // every day accounted for.
+  test("days are listed before the evidence phase finishes", async () => {
+    const db = getDb();
+    const taskTypes = db.select().from(schema.taskTypes).all();
+    db.delete(schema.taskTypes).run(); // makes ensureTaskTypes throw, mid-sync
+
+    try {
+      const run = db
+        .insert(schema.runs)
+        .values({ fromDate: "2026-09-01", toDate: "2026-09-04", status: "pending" })
+        .returning()
+        .get();
+
+      await executeRun(
+        run.id,
+        { fromYMD: "2026-09-01", toYMD: "2026-09-04", hoursPerDay: 8 },
+        new FakeProvider(),
+      );
+
+      const finished = db.select().from(schema.runs).all().find((r) => r.id === run.id)!;
+      expect(finished.status).toBe("failed");
+      expect(finished.progress?.phase).toBe("sync");
+      // 2026-09-01..04 is Tue-Fri: four workdays, all known before the failure.
+      expect(Object.keys(finished.progress!.dayStatus).sort()).toEqual([
+        "2026-09-01",
+        "2026-09-02",
+        "2026-09-03",
+        "2026-09-04",
+      ]);
+      expect(Object.values(finished.progress!.dayStatus).every((s) => s === "pending")).toBe(true);
+      expect(finished.progress?.total).toBe(4);
+    } finally {
+      for (const t of taskTypes) db.insert(schema.taskTypes).values(t).run();
+    }
+  });
+
   test("invalid AI output triggers repair prompt then succeeds", async () => {
     const db = getDb();
     const run = db

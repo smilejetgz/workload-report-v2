@@ -420,6 +420,7 @@ export function HomePage() {
             cards={cardsByDate.get(day.date) ?? []}
             taskTypes={taskTypesQuery.data?.taskTypes ?? []}
             runActive={isGenerating}
+            runPhase={run?.progress?.phase}
             runStatus={run?.progress?.dayStatus[day.date]}
             onRegenerate={(date) => generate.mutate([date])}
           />

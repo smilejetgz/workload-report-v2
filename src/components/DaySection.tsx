@@ -15,6 +15,8 @@ export function DaySection({
   taskTypes,
   /** A run is in flight right now (any day of it). */
   runActive,
+  /** Which stage the run is in: reading evidence, or writing days. */
+  runPhase,
   /** This day's place in that run. "empty" = no evidence, left blank on purpose. */
   runStatus,
   onRegenerate,
@@ -23,6 +25,7 @@ export function DaySection({
   cards: Card[];
   taskTypes: TaskType[];
   runActive: boolean;
+  runPhase?: "sync" | "generate";
   runStatus?: string;
   onRegenerate: (date: string) => void;
 }) {
@@ -57,7 +60,10 @@ export function DaySection({
   // A queued day looked identical to an idle one, so the page seemed stuck on
   // everything the run had not reached yet.
   const isWriting = runActive && runStatus === "running";
-  const isQueued = runActive && runStatus === "pending";
+  // Reading evidence can run for minutes before any day is written, so the
+  // planned rows say so instead of sitting there looking untouched.
+  const isPreparing = runActive && runPhase === "sync" && runStatus === "pending";
+  const isQueued = runActive && runPhase !== "sync" && runStatus === "pending";
   const plannedSec = cards.reduce((sum, c) => sum + c.durationSec, 0);
   const segments: MeterSegment[] = cards.map((c) => ({
     sec: c.durationSec,
@@ -130,7 +136,11 @@ export function DaySection({
           {formatThaiDate(day.date)}
         </h3>
 
-        <div className="order-3 w-full sm:order-none sm:w-auto sm:flex-1">
+        <div
+          className={`order-3 w-full sm:order-none sm:w-auto sm:flex-1 ${
+            isPreparing ? "animate-pulse" : ""
+          }`}
+        >
           <Meter segments={segments} targetSec={day.targetSec} height={6} />
         </div>
 
@@ -150,6 +160,11 @@ export function DaySection({
           </span>
         )}
         {isQueued && <span className="text-[12px] text-muted">รอคิว</span>}
+        {isPreparing && (
+          <span className="inline-flex items-center gap-1.5 text-[12px] text-muted">
+            <Spinner /> อ่านหลักฐาน
+          </span>
+        )}
 
         <div className="ml-auto flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 sm:opacity-60 sm:hover:opacity-100">
           <Button size="sm" variant="ghost" onClick={() => setIsEditingTarget((v) => !v)}>
@@ -195,7 +210,7 @@ export function DaySection({
         )}
         {cards.length === 0 && !isWriting && runStatus !== "empty" && (
           <p className="px-2 py-1 text-[12px] text-muted">
-            {isQueued ? "รอคิว" : "ยังไม่มีรายการ"}
+            {isPreparing ? "กำลังอ่าน commit และ ClickUp" : isQueued ? "รอคิว" : "ยังไม่มีรายการ"}
           </p>
         )}
       </div>

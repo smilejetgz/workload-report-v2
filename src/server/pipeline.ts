@@ -87,6 +87,14 @@ export async function executeRun(
     const defaultSec = params.hoursPerDay ? params.hoursPerDay * 3600 : getDefaultDailySec();
     const overrides = db.select().from(schema.dayTargets).all();
     const targets = resolveDayTargets(fromYMD, toYMD, defaultSec, overrides);
+    const workDays = targets.filter(
+      (t) => t.targetSec > 0 && (regenerate.size === 0 || regenerate.has(t.date)),
+    );
+    // Published before the sync: reading evidence takes a while (a ClickUp pull
+    // can run for minutes) and the day rows have to say "รอคิว" meanwhile.
+    progress.total = workDays.length;
+    progress.dayStatus = Object.fromEntries(workDays.map((d) => [d.date, "pending" as const]));
+    log("info", `วันทำงานในช่วงนี้ ${workDays.length} วัน`);
 
     // --- Evidence + remote preflight (sequential, shared by all days) -------
     const sync = await refreshEvidence(fromYMD, toYMD, log);
@@ -107,11 +115,6 @@ export async function executeRun(
         .run();
     }
 
-    const workDays = targets.filter(
-      (t) => t.targetSec > 0 && (regenerate.size === 0 || regenerate.has(t.date)),
-    );
-    progress.total = workDays.length;
-    progress.dayStatus = Object.fromEntries(workDays.map((d) => [d.date, "pending" as const]));
     progress.phase = "generate";
     log("info", `เริ่มเขียนรายงาน ${workDays.length} วัน (ทำพร้อมกันครั้งละ ${DAY_CONCURRENCY})`);
 
