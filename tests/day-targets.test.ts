@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { expandTargetRange, resolveDayTargets } from "@/server/day-targets";
+import { shouldSyncClickup } from "@/server/settings";
 import { dateRange, isWeekend, timeOfDay, toBangkokYMD } from "@/server/time";
 
 const H = 3600;
@@ -100,5 +101,26 @@ describe("expandTargetRange — marking leave over several days", () => {
 
   test("a range that is entirely weekend yields nothing to write", () => {
     expect(expandTargetRange("2026-08-22", "2026-08-23")).toEqual([]);
+  });
+});
+
+describe("shouldSyncClickup", () => {
+  test("on by default", () => {
+    expect(shouldSyncClickup({ setting: null, envSkip: false })).toBe(true);
+  });
+
+  test("the checkbox turns it off", () => {
+    expect(shouldSyncClickup({ setting: "0", envSkip: false })).toBe(false);
+    expect(shouldSyncClickup({ setting: "false", envSkip: false })).toBe(false);
+  });
+
+  test("the checkbox turns it back on", () => {
+    expect(shouldSyncClickup({ setting: "1", envSkip: false })).toBe(true);
+  });
+
+  // The env switch exists for tests and for a git-only machine; it must win so
+  // a run can never spawn the ClickUp CLI there.
+  test("the environment switch overrides the checkbox", () => {
+    expect(shouldSyncClickup({ setting: "1", envSkip: true })).toBe(false);
   });
 });

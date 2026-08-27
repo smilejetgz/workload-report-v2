@@ -10,7 +10,7 @@
 | DB | Drizzle + better-sqlite3 (SQLite ที่ `data/app.db`) |
 | Runtime | **Node เท่านั้น** — better-sqlite3 crash ใต้ Bun runtime (NAPI fatal, ยืนยันแล้วกับ bun 1.2.10) → CLI script รันด้วย `tsx`; bun ใช้เป็น package manager เท่านั้น |
 | workload auth | JWT ของ workload เอง (`localStorage.token.access_token` บนเว็บ, ~792 chars) — **ไม่ใช่** Zoho `access_token` จาก URL `#authen` (ตัวนั้น API ตอบ 401/403) |
-| ClickUp | **ไม่ต้องตั้งค่า** — ดึงผ่าน claude.ai ClickUp MCP connector (headless `claude -p` + `--output-format stream-json`, อ่าน tool_result จาก transcript ตรง ๆ ไม่ให้โมเดล copy ข้อมูล) · ใส่ personal token `pk_…` ได้ถ้าอยากใช้ REST ที่เร็วกว่า |
+| ClickUp | **ปิดได้จากหน้าแรก** (ติ๊ก "ค้นใน ClickUp") — ปิดแล้วเขียนจาก commit อย่างเดียว เร็วขึ้นมาก · **ไม่ต้องตั้งค่า** — ดึงผ่าน claude.ai ClickUp MCP connector (headless `claude -p` + `--output-format stream-json`, อ่าน tool_result จาก transcript ตรง ๆ ไม่ให้โมเดล copy ข้อมูล) · ใส่ personal token `pk_…` ได้ถ้าอยากใช้ REST ที่เร็วกว่า |
 | AI | `claude -p` CLI (stdin + `--output-format json`) ผ่าน provider interface + **FakeProvider สำหรับ test** |
 | เวลาไม่พอเป้า | เติมอัตโนมัติ + badge `inferred` — **เฉพาะวันที่มีหลักฐาน**; วันที่ไม่มีหลักฐานเลย = เว้นว่าง ไม่แต่ง |
 | ภาษา | ไทยเป็นฐาน + ศัพท์เทคนิคอังกฤษ (ยกกฎ prompt v1), ไม่ใส่ commit hash |
@@ -160,6 +160,17 @@ scripts/  generate.ts  import-v1.ts   # รันด้วย tsx (Node) เท�
   > ผลจริงปี 2026: bundled ผิด 8 วัน — บริษัทหยุด 2026-01-02 (ไม่ใช่ 01-01) + 12-30, และ**ทำงาน**
   > วันมาฆบูชา/ฉัตรมงคล/วิสาขบูชา/อาสาฬหบูชา/เข้าพรรษา/รัฐธรรมนูญ
 
+## 4c. เขียนให้ HR อ่านรู้เรื่อง
+รายงานนี้คนอ่านคือ HR และหัวหน้าที่ไม่ได้เขียนโค้ด — prompt จึงสั่งให้เขียน **ผลลัพธ์ของงาน**
+(ผู้ใช้/ลูกค้าทำอะไรได้เพิ่ม หรือปัญหาอะไรหายไป) ห้ามใส่ชื่อไฟล์ ฟังก์ชัน คอลัมน์ branch flag
+หรือรหัสสถานะภายใน · ชื่อสินค้า/ฟีเจอร์ที่บริษัทใช้จริง (Ket-CMS, LINE OA, ClickUp, Order) เก็บไว้ได้
+- **validator บังคับจริง** ไม่ใช่แค่ขอ: ตก repair ถ้าเจอ `snake_case`, path ไฟล์, หรือ `func()`
+  · ตั้งใจไม่แบน camelCase เพราะชื่อสินค้าจริงเป็น camel (LineShop, ClickUp)
+- **style example ต้องคุมด้วย**: corpus จาก v1 เต็มไปด้วยชื่อฟังก์ชัน ถ้าไม่บอกโมเดลจะลอกสไตล์เดิมกลับมา
+  → เปลี่ยน label เป็น "copy their SHAPE only ... do NOT copy their wording"
+> ของจริงก่อนแก้: `เพิ่ม flag ignore_group_cover ใน search_front พร้อม util และ unit test`
+> หลังแก้: `ชื่อสินค้าบนหน้าจอขายอ่านง่ายขึ้น ไม่ยาวเกินช่อง`
+
 ## 4b. ClickUp link (deterministic — ไม่ให้ AI เดา)
 `engine/clickup-link.ts`: หลัง generate → ไล่ ticket id จาก **commit ที่ card อ้างถึง** (มากสุดชนะ) →
 fallback เป็น `clickup_task` ที่โมเดลใส่ → fallback `evidence.tasks` → map กับ `clickup_tasks` ที่ sync ไว้จริง
@@ -206,6 +217,7 @@ fallback เป็น `clickup_task` ที่โมเดลใส่ → fallb
 | P5 | **UI หน้าเดียว 2-3 คลิก** + secondary tools (edit/regenerate/coverage/calendar) | ✅ (dark mode ด้วย) |
 | P6 | polish ต่อได้: recurring templates (ประชุมประจำ), undo UI จาก card_versions, keyboard shortcuts | ⏳ เหลือเป็น backlog |
 | P7 | **commit-first priority + git author multi-select + identity link ↔ create-task-list** (89 tests) | ✅ 21 ส.ค. 2026 |
+| P18 | **เขียนให้ HR เข้าใจ** (prompt + validator บังคับ) · **ติ๊กเลือกได้ว่าจะค้น ClickUp ไหม** (199 tests) | ✅ 21 ส.ค. 2026 |
 | P17 | **fix: ระหว่าง sync แถววันไม่มี loading** — คิดรายการวันก่อนอ่านหลักฐาน (187 tests) | ✅ 21 ส.ค. 2026 |
 | P16 | **fix: ticket id จับผิด** (hex color, ISO-8601, V8-7) + สถานะรายวัน กำลังเขียน/รอคิว (186 tests) | ✅ 21 ส.ค. 2026 |
 | P15 | **บันทึกทุกขั้นตอนแบบสด + token/model/ราคา ต่อครั้งและรวม** · fix: หน้าต่างขึ้นบ้างไม่ขึ้นบ้าง (178+ tests) | ✅ 21 ส.ค. 2026 |

@@ -12,6 +12,7 @@ export const SETTING_KEYS = [
   "default_daily_hours",
   "rules_md",
   "git_authors", // JSON array of git emails/names that count as "me"
+  "clickup_enabled", // "0" to generate from commits alone
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -49,4 +50,28 @@ export function getAllSettings(): Record<string, string> {
 export function getDefaultDailySec(): number {
   const hours = Number(getSetting("default_daily_hours") ?? "8");
   return (Number.isFinite(hours) && hours > 0 ? hours : 8) * 3600;
+}
+
+/**
+ * Whether a run should go and look in ClickUp.
+ *
+ * Off means the report is written from commits alone, which is quick; the
+ * ClickUp pull goes through a headless CLI session and can take minutes.
+ * WORKLOAD_SKIP_CLICKUP_SYNC still wins, so tests and git-only machines can
+ * never spawn it.
+ */
+export function shouldSyncClickup(input: {
+  setting: string | null;
+  envSkip: boolean;
+}): boolean {
+  if (input.envSkip) return false;
+  if (input.setting === null) return true; // never configured: keep it on
+  return input.setting !== "0" && input.setting.toLowerCase() !== "false";
+}
+
+export function isClickupEnabled(): boolean {
+  return shouldSyncClickup({
+    setting: getSetting("clickup_enabled"),
+    envSkip: process.env.WORKLOAD_SKIP_CLICKUP_SYNC === "1",
+  });
 }

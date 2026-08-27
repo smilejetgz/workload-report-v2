@@ -168,6 +168,35 @@ describe("buildDayPrompt", () => {
   test("omits the commit-coverage rule when the day has no commits", () => {
     expect(promptFor()).not.toMatch(/MUST all be covered/i);
   });
+
+  test("names the reader and bans code identifiers in the note", () => {
+    const prompt = promptFor({ commits: [commit()] });
+    expect(prompt).toMatch(/HR/);
+    expect(prompt).toMatch(/never.*(file|function|column|flag)/i);
+  });
+
+  test("tells the model the examples are for shape, not for wording", () => {
+    const prompt = buildDayPrompt({
+      evidence: build({ commits: [commit()] }),
+      taskTypeNames: ["Ket-CMS"],
+      rulesMd: null,
+      styleExamples: [
+        {
+          id: 1,
+          tasksDate: DATE,
+          taskType: "Ket-CMS",
+          durationSec: 3600,
+          noteHtml: "<p><b>x</b></p><ul><li>ปรับ edit_order_shipping_address</li></ul>",
+          source: "v1",
+          createdAt: null,
+        },
+      ],
+    });
+    // The old corpus is full of function names; copying its wording is the
+    // very thing being fixed.
+    expect(prompt).toMatch(/shape|โครง|formatting/i);
+    expect(prompt).toMatch(/do not copy|อย่าลอก|not their wording/i);
+  });
 });
 
 describe("hasDayEvidence — what counts as proof that work happened", () => {

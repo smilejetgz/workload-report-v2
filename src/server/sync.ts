@@ -3,7 +3,7 @@
 import { and, eq, gte, lte } from "drizzle-orm";
 import { getDb, schema } from "@/db/client";
 import { authorFiltersByProject, getSelectedAuthors } from "./authors";
-import { getSetting, setSetting } from "./settings";
+import { getSetting, isClickupEnabled, setSetting } from "./settings";
 import { isGitRepo, scanCommits } from "./sources/git";
 import {
   epochMsToDate,
@@ -137,7 +137,9 @@ export async function refreshEvidence(
   let clickupSource: SyncSummary["clickupSource"] = "none";
   const token = getSetting("clickup_token");
 
-  if (token) {
+  if (!isClickupEnabled()) {
+    onLog("info", "ข้าม ClickUp (ปิดไว้) — เขียนรายงานจาก commit อย่างเดียว");
+  } else if (token) {
     onLog("info", "ดึง ClickUp ผ่าน personal token");
     try {
       const { teamId, userId } = await resolveClickupIdentity(token);
@@ -220,11 +222,6 @@ async function syncClickupViaMcp(
   toYMD: string,
   onLog: RunLogger = () => {},
 ): Promise<{ tasks: number; events: number; warning: string | null }> {
-  // Hermetic escape hatch: tests (and users who want git-only) skip the CLI spawn.
-  if (process.env.WORKLOAD_SKIP_CLICKUP_SYNC === "1") {
-    onLog("info", "ข้าม ClickUp (ตั้งค่าให้ข้ามไว้)");
-    return { tasks: 0, events: 0, warning: null };
-  }
   // Ticket ids seen in commits but not yet in the cache → fetched directly.
   const knownCustomIds = new Set(
     db

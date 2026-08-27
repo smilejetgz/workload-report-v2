@@ -221,3 +221,81 @@ describe("validateDayPlan — commit coverage (commits are the real work)", () =
     expect(needsRepair).toBe(false);
   });
 });
+
+describe("validateDayPlan — the note has to read as work, not as code", () => {
+  const ctx = {
+    date: "2026-08-03",
+    allowedTaskTypes: ["Ket-CMS"],
+    knownCommitHashes: [],
+    knownTaskRefs: [],
+  };
+  // No evidence refs here: this block is about wording, and unknown refs would
+  // raise issues of their own.
+  const withNote = (noteHtml: string) =>
+    ({
+      ...validPlan,
+      cards: [
+        {
+          ...validPlan.cards[0],
+          note_html: noteHtml,
+          clickup_task: null,
+          evidence: { commits: [], tasks: [] },
+        },
+      ],
+    }) as DayPlan;
+
+  test("a plain-language note passes untouched", () => {
+    const { needsRepair, issues } = validateDayPlan(
+      withNote("<p><b>[DEV-1] แก้ที่อยู่ออเดอร์</b></p><ul><li>ลูกค้าแก้ที่อยู่เองได้แล้ว</li></ul>"),
+      ctx,
+    );
+    expect(issues).toEqual([]);
+    expect(needsRepair).toBe(false);
+  });
+
+  // HR reads these reports. A function name tells them nothing about the work.
+  test("an identifier copied out of the code is sent back for a rewrite", () => {
+    const { needsRepair, issues } = validateDayPlan(
+      withNote("<p><b>งาน</b></p><ul><li>ปรับเงื่อนไขใน edit_order_shipping_address</li></ul>"),
+      ctx,
+    );
+    expect(needsRepair).toBe(true);
+    expect(issues.join(" ")).toContain("edit_order_shipping_address");
+  });
+
+  test("a file path is sent back too", () => {
+    const { needsRepair } = validateDayPlan(
+      withNote("<p><b>งาน</b></p><ul><li>แก้ src/app/order/list.ts ให้กรองถูก</li></ul>"),
+      ctx,
+    );
+    expect(needsRepair).toBe(true);
+  });
+
+  test("a function call is sent back too", () => {
+    const { needsRepair } = validateDayPlan(
+      withNote("<p><b>งาน</b></p><ul><li>เรียก createOrder() ซ้ำ</li></ul>"),
+      ctx,
+    );
+    expect(needsRepair).toBe(true);
+  });
+
+  // Product names are what HR actually recognises — they must survive.
+  test("product and feature names are not treated as code", () => {
+    const { needsRepair, issues } = validateDayPlan(
+      withNote(
+        "<p><b>Ket-CMS</b></p><ul><li>เชื่อม LINE OA กับ ClickUp ให้ LineShop ใช้ได้</li></ul>",
+      ),
+      ctx,
+    );
+    expect(issues).toEqual([]);
+    expect(needsRepair).toBe(false);
+  });
+
+  test("an English word on its own is fine", () => {
+    const { needsRepair } = validateDayPlan(
+      withNote("<p><b>งาน</b></p><ul><li>เพิ่มปุ่ม export ในหน้า order</li></ul>"),
+      ctx,
+    );
+    expect(needsRepair).toBe(false);
+  });
+});

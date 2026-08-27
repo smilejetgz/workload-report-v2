@@ -50,11 +50,11 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
   "date": "${evidence.date}",
   "cards": [
     {
-      "topic": "short Thai headline of the work topic",
+      "topic": "short plain-Thai headline a non-technical reader understands",
       "task_type": "one of the allowed task types",
       "website": null,
       "clickup_task": "custom id like DEV-6395 if the card is tied to one task, else null",
-      "note_html": "<p><b>[DEV-6395] หัวข้องาน</b></p><ul><li>รายละเอียดสั้น ๆ</li></ul>",
+      "note_html": "<p><b>[DEV-6395] ส่งโปรโมชันอัตโนมัติเมื่อมีออเดอร์</b></p><ul><li>ลูกค้าได้รับคูปองทันทีหลังสั่งซื้อ ไม่ต้องส่งเอง</li><li>รองรับการตั้งเงื่อนไขว่าออเดอร์แบบไหนถึงได้รับ</li></ul>",
       "hours": 2.5,
       "time_of_day": "morning",
       "origin": "git",
@@ -88,9 +88,18 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
 - note_html: HTML only, tags allowed: <p> <b> <ul> <li> <code>. Headline pattern:
   <p><b>[TICKET-ID] หัวข้อ</b></p> (omit [TICKET-ID] when there is none), then <ul> bullets.
   Each bullet under 14 words. Combine similar commits — do not restate messages verbatim.
-- LANGUAGE: Thai as base, keep technical terms / product names / API names / file names
-  in English (e.g. discount, endpoint, order, middleware). Natural Thai grammar with
-  English tech terms inlined. Do NOT include commit hashes inside note_html.
+- READER: this report is read by HR and by managers who do not write code. Write what
+  the work achieved — what a user, a customer or the team can now do, or what problem
+  stopped happening. Never name a file, a function, a database column, a branch, a flag
+  or an internal status code; those say nothing to the reader. Translate them into the
+  situation they affect.
+    good: <li>ลูกค้าแก้ที่อยู่จัดส่งเองได้ในขั้นตอนที่รอจัดส่ง</li>
+    bad:  <li>ปรับเงื่อนไขใน edit_order_shipping_address ของ orders service</li>
+    good: <li>หน้ารายการสินค้าโหลดเร็วขึ้นเมื่อร้านมีสินค้าจำนวนมาก</li>
+    bad:  <li>ตัด query ที่โตตามปริมาณข้อมูลใน evaluate_order</li>
+- LANGUAGE: plain Thai. Product and feature names stay as the company writes them
+  (Ket-CMS, LINE OA, ClickUp, Order, Blog). Keep an English word only when Thai has no
+  everyday equivalent. No commit hashes anywhere in note_html.
 - evidence.commits: hashes (≥7 chars) of the commits this card covers.
   evidence.tasks: ClickUp custom ids / task ids this card covers. Use only ids that
   appear in the evidence below — never invent ids.
@@ -108,7 +117,10 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
   reviewer_notes. A day with no evidence never reaches you: it is left empty on
   purpose, so never pad one out from the backlog.
 
-## Style examples from previously submitted reports (mimic tone and formatting)
+## Previously submitted reports — copy their SHAPE only
+Use these for structure and length (a bold headline, then a few short bullets).
+Do NOT copy their wording: older reports name functions and services, which is
+exactly what this report must avoid.
 ${styleBlock}
 
 ${input.rulesMd ? `## Additional user rules (override style, not the JSON contract)\n${stripHtml(input.rulesMd).slice(0, 2000)}\n` : ""}

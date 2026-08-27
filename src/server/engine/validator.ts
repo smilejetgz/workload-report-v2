@@ -60,8 +60,11 @@ export function parseDayPlan(raw: string): { plan: DayPlan | null; error: string
   return { plan: result.data, error: null };
 }
 
+import { htmlToText } from "@/lib/html-text";
 import { sanitizeNoteHtml } from "@/lib/sanitize";
 export { sanitizeNoteHtml };
+
+const stripTags = htmlToText;
 
 export type ValidationContext = {
   date: string;
@@ -74,6 +77,25 @@ export type ValidationContext = {
 };
 
 const MAX_LISTED_UNCOVERED = 6;
+
+// These reports are read by HR, so a note has to describe the work, not the
+// code. Product names (Ket-CMS, LineShop, ClickUp) must survive, which rules
+// out a blanket camel-case check — only shapes that never appear in a product
+// name are rejected.
+const CODE_SHAPES: { label: string; re: RegExp }[] = [
+  { label: "ชื่อในโค้ด", re: /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/ }, // edit_order_shipping_address
+  { label: "path ไฟล์", re: /\b[\w.-]+\/[\w./-]+\.[a-z]{2,4}\b/ }, // src/app/order/list.ts
+  { label: "การเรียกฟังก์ชัน", re: /\b[A-Za-z_][\w]*\(\s*\)/ }, // createOrder()
+];
+
+/** The first code-shaped fragment in a note, or null when it reads as prose. */
+function findCodeShape(text: string): { label: string; sample: string } | null {
+  for (const { label, re } of CODE_SHAPES) {
+    const match = re.exec(text);
+    if (match) return { label, sample: match[0] };
+  }
+  return null;
+}
 
 function hashesOverlap(a: string, b: string): boolean {
   const x = a.toLowerCase();
@@ -100,6 +122,7 @@ export function validateDayPlan(plan: DayPlan, ctx: ValidationContext): Validate
     issues.push(`date ${plan.date} ไม่ตรงกับ ${ctx.date} — แก้ให้แล้ว`);
   }
 
+  const codeShaped: string[] = [];
   const cards = plan.cards.map((card) => {
     const canonicalType = typeByLower.get(card.task_type.toLowerCase());
     if (!canonicalType) {
@@ -118,13 +141,25 @@ export function validateDayPlan(plan: DayPlan, ctx: ValidationContext): Validate
       return found;
     });
 
+    const note = sanitizeNoteHtml(card.note_html);
+    const codeShape = findCodeShape(stripTags(note));
+    if (codeShape) codeShaped.push(`${codeShape.label} "${codeShape.sample}"`);
+
     return {
       ...card,
       task_type: canonicalType ?? card.task_type,
-      note_html: sanitizeNoteHtml(card.note_html),
+      note_html: note,
       evidence: { commits, tasks },
     };
   });
+
+  if (codeShaped.length > 0) {
+    issues.push(
+      `เขียนแบบ HR อ่านไม่รู้เรื่อง: ${codeShaped.slice(0, 3).join(", ")} — ` +
+        "เขียนใหม่เป็นผลลัพธ์ของงานด้วยภาษาคนทั่วไป ห้ามใส่ชื่อไฟล์ ฟังก์ชัน คอลัมน์ หรือ flag",
+    );
+    needsRepair = true;
+  }
 
   if (cards.length > 5) {
     issues.push(`มี ${cards.length} cards (เกิน 5) — ควรรวมให้เหลือ ≤5`);

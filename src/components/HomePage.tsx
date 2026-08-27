@@ -216,6 +216,13 @@ export function HomePage() {
     },
   });
 
+  const clickupEnabled = settingsQuery.data?.settings.clickup_enabled !== "0";
+  const toggleClickup = useMutation({
+    mutationFn: (enabled: boolean) => api.setClickupEnabled(enabled),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onError: (error) => setNotice({ kind: "error", text: (error as Error).message }),
+  });
+
   const copyPayload = useMutation({
     mutationFn: async () => {
       const { payload, count } = await api.submitPayload(range.from, range.to);
@@ -335,6 +342,19 @@ export function HomePage() {
               className="w-14 text-right font-mono"
             />
             ชม./วัน
+          </label>
+          <label
+            className="flex cursor-pointer items-center gap-1.5 text-[13px] text-muted"
+            title="ปิดแล้วจะเขียนจาก commit อย่างเดียว เร็วขึ้นมากเพราะไม่ต้องรอดึง ClickUp"
+          >
+            <input
+              type="checkbox"
+              checked={clickupEnabled}
+              disabled={runActive || toggleClickup.isPending}
+              onChange={(e) => toggleClickup.mutate(e.target.checked)}
+              className="accent-(--accent)"
+            />
+            ค้นใน ClickUp
           </label>
           <Button
             variant="primary"
