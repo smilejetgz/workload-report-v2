@@ -1,0 +1,1 @@
+ALTER TABLE `cards` ADD `clickup_url` text;
