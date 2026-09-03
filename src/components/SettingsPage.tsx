@@ -176,6 +176,20 @@ export function SettingsPage() {
 
         <section className="space-y-3 rounded-xl border border-border bg-surface p-3.5">
           <Label>ClickUp</Label>
+          <label className="flex cursor-pointer items-start gap-2 text-[13px]">
+            <input
+              type="checkbox"
+              checked={value("clickup_enabled") !== "0"}
+              onChange={(e) => set("clickup_enabled", e.target.checked ? "1" : "0")}
+              className="mt-1 accent-(--accent)"
+            />
+            <span>
+              ค้นใน ClickUp ตอนสร้างรายงาน
+              <span className="mt-0.5 block text-[12px] text-muted">
+                ปิดแล้วจะเขียนจาก commit อย่างเดียว เร็วขึ้นมากเพราะไม่ต้องรอดึง ClickUp
+              </span>
+            </span>
+          </label>
           <p className="text-[13px] text-muted">
             ไม่ต้องตั้งค่าก็ใช้ได้ ระบบดึงผ่าน Claude MCP connector ที่ล็อกอินอยู่แล้ว
             ใส่โทเคนด้านล่างถ้าต้องการให้ดึงเร็วขึ้น

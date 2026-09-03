@@ -81,12 +81,6 @@ export const api = {
 
   gitAuthors: (days?: number) =>
     call<GitAuthorsData>(`/api/git-authors${days ? `?days=${days}` : ""}`),
-  /** Looking in ClickUp is optional: it is the slow half of gathering evidence. */
-  setClickupEnabled: (enabled: boolean) =>
-    call<{ saved: string[] }>("/api/settings", {
-      method: "PUT",
-      body: JSON.stringify({ values: { clickup_enabled: enabled ? "1" : "0" } }),
-    }),
   /** Persisted as a JSON array so one setting holds the whole selection. */
   saveGitAuthors: (authors: string[]) =>
     call<{ saved: string[] }>("/api/settings", {
