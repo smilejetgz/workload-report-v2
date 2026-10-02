@@ -85,3 +85,22 @@ describe("buildCoverage", () => {
     expect(report.offDaysWithEvidence).toEqual(["2026-08-08"]);
   });
 });
+
+describe("buildCoverage — one commit checked out twice", () => {
+  // A repo and its fork/mirror share history, so the scan lists the same hash
+  // under two projects. It is one piece of work and must be reported once —
+  // the list also keys on it, and React rejects duplicate keys.
+  test("reports a hash shared by two projects once", () => {
+    const report = buildCoverage({
+      days: [{ date: "2026-09-29", targetSec: 8 * 3600 }],
+      cards: [],
+      commits: [
+        { hash: "c18c6000", date: "2026-09-29", project: "merge-verify-service", message: "fix" },
+        { hash: "C18C6000", date: "2026-09-29", project: "merge-ownership-claim-frontend", message: "fix" },
+        { hash: "aaaa1111", date: "2026-09-29", project: "merge-verify-service", message: "feat" },
+      ],
+      closedTasks: [],
+    });
+    expect(report.unreferencedCommits.map((c) => c.hash)).toEqual(["c18c6000", "aaaa1111"]);
+  });
+});
