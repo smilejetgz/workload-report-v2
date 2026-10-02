@@ -46,8 +46,13 @@ export function SettingsPage() {
     mutationFn: () => api.saveSettings(draft),
     onSuccess: (r) => {
       setDraft({});
-      setNotice(`บันทึกแล้ว: ${r.saved.join(", ")}`);
+      setNotice(
+        r.account
+          ? `บันทึกแล้ว — โทเคนเป็นของ ${r.account.name} (${r.account.email})`
+          : `บันทึกแล้ว: ${r.saved.join(", ")}`,
+      );
       queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ["me"] });
     },
     onError: (e) => setNotice((e as Error).message),
   });
@@ -55,7 +60,7 @@ export function SettingsPage() {
   const syncTypes = useMutation({
     mutationFn: api.syncTaskTypes,
     onSuccess: (r) => {
-      setNotice(`sync task types แล้ว ${r.synced} แบบ`);
+      setNotice(`ดึงจาก workload แล้ว: ประเภทงาน ${r.synced} แบบ · โปรเจกต์ ${r.projects} รายการ`);
       queryClient.invalidateQueries({ queryKey: ["taskTypes"] });
     },
     onError: (e) => setNotice((e as Error).message),
@@ -130,11 +135,11 @@ export function SettingsPage() {
         <section className="space-y-3 rounded-xl border border-border bg-surface p-3.5">
           <Label>บัญชีสำหรับส่งรายงาน</Label>
           <Field
-            label="โทเคน (JWT)"
+            label="โทเคนของเว็บ workload"
             hint={
               settingsQuery.data?.jwtExpiresAt
-                ? `หมดอายุ ${new Date(settingsQuery.data.jwtExpiresAt).toLocaleString("th-TH")}${settingsQuery.data.jwtExpired ? " — หมดแล้ว วางใหม่" : ""}`
-                : "เปิด workload.ketspace.io แล้วคัดลอกค่าจาก localStorage.token → access_token"
+                ? `หมดอายุ ${new Date(settingsQuery.data.jwtExpiresAt).toLocaleString("th-TH")}${settingsQuery.data.jwtExpired ? " — หมดแล้ว วางใหม่" : " (โทเคนเว็บอยู่ได้ 8 ชั่วโมง)"}`
+                : "เปิด workloads.ketspace.io → DevTools → Application → Local Storage → คัดลอกค่า workload.access_token"
             }
           >
             <textarea
@@ -145,20 +150,19 @@ export function SettingsPage() {
               className="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs focus:border-accent focus:outline-none"
             />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="ชื่อที่แสดง">
-              <Input value={value("task_by")} onChange={(e) => set("task_by", e.target.value)} className="w-full" />
-            </Field>
-            <Field label="อีเมล">
-              <Input value={value("email")} onChange={(e) => set("email", e.target.value)} className="w-full" />
-            </Field>
-          </div>
           <p className="text-[12px] text-muted">
-            ชื่อและอีเมลนี้ถูกส่งไปกับทุกรายการ เลือกจากรายชื่อพนักงานด้านล่างให้ตรงกับ git user ที่เลือกไว้
+            ทุกรายการที่ส่งจะขึ้นในชื่อเจ้าของโทเคน
+            {current.task_by ? (
+              <>
+                {" "}— ตอนนี้คือ <b>{current.task_by}</b> ({current.email})
+              </>
+            ) : (
+              " — วางโทเคนแล้วระบบจะเช็คชื่อให้เอง"
+            )}
           </p>
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => syncTypes.mutate()} disabled={syncTypes.isPending}>
-              {syncTypes.isPending && <Spinner />} ดึงประเภทงานใหม่
+              {syncTypes.isPending && <Spinner />} ดึงประเภทงาน/โปรเจกต์ใหม่
             </Button>
             <span className="text-[12px] text-muted">
               มี {taskTypesQuery.data?.taskTypes.length ?? 0} ประเภท
@@ -166,13 +170,7 @@ export function SettingsPage() {
           </div>
         </section>
 
-        <IdentitySection
-          taskBy={value("task_by")}
-          email={value("email")}
-          onPickEmployee={(employee) =>
-            setDraft((d) => ({ ...d, task_by: employee.name, email: employee.email }))
-          }
-        />
+        <IdentitySection />
 
         <section className="space-y-3 rounded-xl border border-border bg-surface p-3.5">
           <Label>ClickUp</Label>

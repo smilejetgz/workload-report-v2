@@ -18,7 +18,7 @@ export function POST(request: Request) {
     if (cards.length === 0) return fail("ไม่มี card ที่ส่งได้ในช่วงนี้");
     const result = await submitCards(cards);
     if ("missing" in result) return fail(`ยังไม่ได้ตั้งค่า ${result.missing} ในหน้า Settings`);
-    if (result.authExpired) return fail("JWT หมดอายุ — วางใหม่ในหน้า Settings", 401);
+    if (result.authExpired) return fail("โทเคน workload หมดอายุ — วางใหม่ในหน้า Settings", 401);
     return ok(result);
   });
 }
@@ -32,7 +32,6 @@ export function GET(request: Request) {
     if (!isValidYMD(from) || !isValidYMD(to)) return fail("from/to ไม่ถูกต้อง");
     const cards = selectSubmittableCards(from, to);
     const payload = buildPayload(cards);
-    if ("missing" in payload) return fail(`ยังไม่ได้ตั้งค่า ${payload.missing}`);
-    return ok({ payload, count: cards.length });
+    return ok({ payload, count: cards.length - payload.skipped.length });
   });
 }

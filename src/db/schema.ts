@@ -23,19 +23,39 @@ export const projects = sqliteTable("projects", {
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
-// Key-value settings: jwt, task_by, email, clickup_token, clickup_team_id,
-// clickup_user_id, ai_model, default_daily_hours, rules_md
+// Key-value settings: jwt (workload web session token), task_by + email +
+// workload_user_id + workload_position_ids (cached from GET /auth/me),
+// clickup_token, clickup_team_id, clickup_user_id, ai_model,
+// default_daily_hours, rules_md, git_authors, clickup_enabled
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
-// Synced from workload API /tasks/get-tasktype. AI may only pick from this list.
+// Synced from the workload API (GET /task-types). The AI may only pick from
+// this list, and only from the types the user's position is allowed to log.
 export const taskTypes = sqliteTable("task_types", {
   id: integer("id").primaryKey(), // remote id
   name: text("name").notNull(),
   color: text("color"),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  // The type the site itself falls back to ("Others") — used for filler cards.
+  isFallback: integer("is_fallback", { mode: "boolean" }).notNull().default(false),
+  formKind: text("form_kind"), // "plain" | "meeting"
+  // Positions (workload position ids) allowed to log this type; empty = everyone.
+  positionIds: text("position_ids", { mode: "json" }).$type<number[]>().notNull().default([]),
+  syncedAt: integer("synced_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+});
+
+// Synced from the workload API (GET /projects): customer websites plus a few
+// internal projects. A card's `website` is resolved to one of these on upload.
+export const workloadProjects = sqliteTable("workload_projects", {
+  id: integer("id").primaryKey(), // remote id
+  name: text("name").notNull(),
+  kind: text("kind").notNull().default("website"), // "website" | "internal"
+  websiteUrl: text("website_url"),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   syncedAt: integer("synced_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
@@ -269,4 +289,5 @@ export type StyleExample = typeof styleExamples.$inferSelect;
 export type Run = typeof runs.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type TaskType = typeof taskTypes.$inferSelect;
+export type WorkloadProject = typeof workloadProjects.$inferSelect;
 export type DayTarget = typeof dayTargets.$inferSelect;

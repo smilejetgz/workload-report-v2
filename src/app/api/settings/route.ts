@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getSelectedAuthors } from "@/server/authors";
 import { checkIdentity } from "@/server/engine/identity";
 import { fail, handle, ok, parseBody } from "@/server/http";
+import { cachedAccount, refreshMe } from "@/server/me";
 import {
   getAllSettings,
   getSetting,
@@ -26,14 +27,7 @@ export function GET() {
     }
     const jwt = getSetting("jwt");
     const expiry = jwt ? jwtExpiry(jwt) : null;
-    // employees: null → skip the directory checks here (that needs a live API
-    // call; /api/employees does the full version).
-    const identity = checkIdentity({
-      workloadEmail: getSetting("email"),
-      taskBy: getSetting("task_by"),
-      gitAuthors: getSelectedAuthors(),
-      employees: null,
-    });
+    const identity = checkIdentity({ account: cachedAccount(), gitAuthors: getSelectedAuthors() });
     return ok({
       settings: out,
       gitAuthors: getSelectedAuthors(),
@@ -57,6 +51,16 @@ export function PUT(request: Request) {
     const entries = Object.entries(parsed.data.values) as [SettingKey, string][];
     if (entries.length === 0) return fail("ไม่มีค่าให้บันทึก");
     for (const [key, value] of entries) setSetting(key, value.trim());
+
+    // A new token means a possibly different person: look them up right away
+    // so the page can say whose name the reports will land under.
+    const jwt = parsed.data.values.jwt?.trim();
+    if (jwt) {
+      const me = await refreshMe(jwt);
+      if (me.authExpired) return fail("โทเคนนี้ใช้กับ workload ไม่ได้ (401) — คัดลอกใหม่จากเว็บ", 401);
+      if (!me.ok) return fail(`บันทึกแล้ว แต่เช็คบัญชีกับ workload ไม่สำเร็จ (${me.status})`, 502);
+      return ok({ saved: entries.map(([k]) => k), account: me.data });
+    }
     return ok({ saved: entries.map(([k]) => k) });
   });
 }

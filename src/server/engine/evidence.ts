@@ -154,11 +154,11 @@ export function buildDayEvidence(input: {
     });
 
   const existingRemote = input.remoteTasks
-    .filter((t) => t.tasks_date.slice(0, 10) === date)
+    .filter((t) => t.workDate === date)
     .map((t) => ({
-      taskType: t.task_type,
-      durationSec: Number(t.duration) || 0,
-      notePlain: stripHtml(t.note).slice(0, 200),
+      taskType: t.taskTypeName ?? `#${t.taskTypeId ?? "?"}`,
+      durationSec: t.durationSec,
+      notePlain: (stripHtml(t.note) || t.title).slice(0, 200),
     }));
 
   return { date, targetSec: input.targetSec, commits, tasksClosed, tasksActive, comments, existingRemote };

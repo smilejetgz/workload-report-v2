@@ -51,8 +51,8 @@ export type GitAuthorsData = {
   warnings: string[];
 };
 
-export type EmployeesData = {
-  employees: { id: number; name: string; email: string; role?: string }[];
+export type MeData = {
+  account: { id: number; email: string; name: string; role: string; positionIds: number[] };
   identity: IdentityCheck;
 };
 
@@ -61,7 +61,10 @@ export type CardsData = { cards: Card[]; days: ResolvedDayTarget[]; coverage: Co
 export const api = {
   settings: () => call<SettingsData>("/api/settings"),
   saveSettings: (values: Record<string, string>) =>
-    call<{ saved: string[] }>("/api/settings", { method: "PUT", body: JSON.stringify({ values }) }),
+    call<{ saved: string[]; account?: MeData["account"] | null }>("/api/settings", {
+      method: "PUT",
+      body: JSON.stringify({ values }),
+    }),
 
   projects: () => call<{ projects: Project[] }>("/api/projects"),
   discoverProjects: (root?: string) =>
@@ -87,10 +90,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ values: { git_authors: JSON.stringify(authors) } }),
     }),
-  employees: () => call<EmployeesData>("/api/employees"),
+  /** Who the stored workload token belongs to (GET /auth/me on the site). */
+  me: () => call<MeData>("/api/me"),
 
   taskTypes: () => call<{ taskTypes: TaskType[] }>("/api/task-types"),
-  syncTaskTypes: () => call<{ synced: number }>("/api/task-types", { method: "POST" }),
+  /** Refreshes task types and projects from the workload site. */
+  syncTaskTypes: () =>
+    call<{ synced: number; projects: number }>("/api/task-types", { method: "POST" }),
 
   cards: (from: string, to: string) => call<CardsData>(`/api/cards?from=${from}&to=${to}`),
   updateCard: (
@@ -153,7 +159,10 @@ export const api = {
       body: JSON.stringify({ from, to, ids }),
     }),
   submitPayload: (from: string, to: string) =>
-    call<{ payload: { tasks: unknown[] }; count: number }>(`/api/submit?from=${from}&to=${to}`),
+    call<{
+      payload: { days: { workDate: string; items: unknown[] }[]; skipped: string[] };
+      count: number;
+    }>(`/api/submit?from=${from}&to=${to}`),
 
   /** One day (date) or a span (from+to) — leave is usually several days. */
   setDayTarget: (input: {
