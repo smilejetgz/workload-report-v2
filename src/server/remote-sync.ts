@@ -8,127 +8,116 @@ import { and, eq, gte, lte } from "drizzle-orm";
 import { getDb, schema } from "@/db/client";
 import type { Card } from "@/db/schema";
 import { fingerprintCard } from "./pipeline";
-import { getSetting } from "./settings";
-import { decideWriteOutcome, planReconcile, type ReconcileAction } from "./engine/reconcile";
+import { planReconcile, type ReconcileAction, type RemoteTaskLike } from "./engine/reconcile";
 import { sanitizeNoteHtml } from "@/lib/sanitize";
 import { stripHtml } from "./engine/evidence";
 import {
+  batchLog,
   deleteTask,
-  searchTasks,
-  updateTask,
-  type CreateTaskInput,
-  type RemoteTask,
+  describeFailure,
+  isLegacyRemoteId,
+  listMyTasks,
+  v2TaskId,
 } from "./sources/workload";
+import { cardToBatchItem, loadLookups, workloadAccount, type Lookups } from "./workload-account";
 
 export type RemoteOutcome =
   | { ok: true; affected: number }
   | { ok: false; authExpired: boolean; error: string; rowMissing?: boolean };
 
-type Credentials = { jwt: string; taskBy: string; email: string };
-
-function credentials(): Credentials | { missing: string } {
-  const jwt = getSetting("jwt");
-  const taskBy = getSetting("task_by");
-  const email = getSetting("email");
-  if (!jwt) return { missing: "jwt" };
-  if (!taskBy) return { missing: "task_by" };
-  if (!email) return { missing: "email" };
-  return { jwt, taskBy, email };
-}
-
-function toTaskInput(card: Card, creds: Credentials): CreateTaskInput {
-  return {
-    tasks_date: card.tasksDate,
-    duration: card.durationSec,
-    note: card.noteHtml,
-    task_by: creds.taskBy,
-    task_type: card.taskType,
-    email: creds.email,
-    website: card.website,
-    clickup_task: card.clickupTask,
-  };
-}
+const NOT_LINKED =
+  "ยังไม่ได้จับคู่กับแถวใน workload v2 (ส่งไว้ตั้งแต่ระบบเก่า) — กด 'ดึงจาก workload' ก่อน";
 
 /** Push a local edit of an already-submitted card to workload. */
 export async function pushCardUpdate(card: Card): Promise<RemoteOutcome> {
   if (!card.remoteTaskId) return { ok: true, affected: 0 }; // never uploaded
-  const creds = credentials();
-  if ("missing" in creds) {
-    return { ok: false, authExpired: false, error: `ยังไม่ได้ตั้งค่า ${creds.missing}` };
+  const taskId = v2TaskId(card.remoteTaskId);
+  if (taskId === null) return { ok: false, authExpired: false, error: NOT_LINKED };
+  const account = workloadAccount();
+  if ("missing" in account) {
+    return { ok: false, authExpired: false, error: `ยังไม่ได้ตั้งค่า ${account.missing}` };
   }
-  const res = await updateTask({
-    jwt: creds.jwt,
-    id: card.remoteTaskId,
-    task: toTaskInput(card, creds),
+  const loaded = await loadLookups(account.jwt);
+  if (!loaded.ok) return { ok: false, authExpired: loaded.authExpired, error: loaded.error };
+  const built = cardToBatchItem(card, loaded.lookups, taskId);
+  if ("error" in built) return { ok: false, authExpired: false, error: built.error };
+
+  const res = await batchLog({
+    jwt: account.jwt,
+    log: { workDate: card.tasksDate, items: [built.item] },
   });
   if (res.authExpired) return { ok: false, authExpired: true, error: "JWT หมดอายุ" };
-  if (!res.ok) return { ok: false, authExpired: false, error: `update-task ตอบ ${res.status}` };
-  // 0 rows affected is ambiguous (row gone vs. values already identical) —
-  // read the day back before calling it a failure.
-  const outcome = decideWriteOutcome({
-    affected: res.data,
-    rowStillOnRemote: res.data > 0 ? true : await rowExists(creds, card),
-  });
-  if (outcome === "row-missing") {
+  if (res.status === 404) {
     return {
       ok: false,
       authExpired: false,
       rowMissing: true,
-      error: `ไม่เจอแถว #${card.remoteTaskId} ใน workload (ถูกลบไปแล้ว?) — ส่งใหม่ได้`,
+      error: `ไม่เจอแถว #${taskId} ใน workload (ถูกลบไปแล้ว?) — ส่งใหม่ได้`,
     };
   }
-  if (outcome === "unknown") {
-    return {
-      ok: false,
-      authExpired: false,
-      error: `update-task ตอบ 0 แถว และเช็คซ้ำไม่ได้ — ยังไม่ยืนยันว่า workload อัปเดตแล้ว`,
-    };
-  }
-  return { ok: true, affected: res.data };
+  if (!res.ok) return { ok: false, authExpired: false, error: describeFailure("tasks/batch", res) };
+  return { ok: true, affected: res.data.updated.length };
 }
 
 /** Delete the row on workload. Local deletion only happens if this succeeds. */
 export async function deleteCardRemote(card: Card): Promise<RemoteOutcome> {
   if (!card.remoteTaskId) return { ok: true, affected: 0 };
-  const creds = credentials();
-  if ("missing" in creds) {
-    return { ok: false, authExpired: false, error: `ยังไม่ได้ตั้งค่า ${creds.missing}` };
+  // A v1 id says nothing about which v2 row to delete — never guess here.
+  if (isLegacyRemoteId(card.remoteTaskId)) {
+    return { ok: false, authExpired: false, error: NOT_LINKED };
   }
-  const res = await deleteTask({ jwt: creds.jwt, id: card.remoteTaskId });
+  const taskId = v2TaskId(card.remoteTaskId);
+  if (taskId === null) {
+    return { ok: false, authExpired: false, error: `remote id "${card.remoteTaskId}" ไม่ถูกต้อง` };
+  }
+  const account = workloadAccount();
+  if ("missing" in account) {
+    return { ok: false, authExpired: false, error: `ยังไม่ได้ตั้งค่า ${account.missing}` };
+  }
+  const res = await deleteTask({ jwt: account.jwt, id: taskId });
   if (res.authExpired) return { ok: false, authExpired: true, error: "JWT หมดอายุ" };
-  if (!res.ok) return { ok: false, authExpired: false, error: `delete-task ตอบ ${res.status}` };
-
-  // Deleting is destructive and the endpoint answers 200 even for a no-op, so
-  // read the day back and make sure the row is really gone before we drop it
-  // locally — otherwise an invisible row would stay on the real report.
-  const stillThere = await rowExists(creds, card);
-  if (stillThere === true) {
-    return {
-      ok: false,
-      authExpired: false,
-      error: `เรียก delete-task แล้วแต่แถว #${card.remoteTaskId} ยังอยู่ใน workload`,
-    };
-  }
-  if (stillThere === false) return { ok: true, affected: Math.max(res.data, 1) };
-  // Cannot verify → trust only a positive rows-affected count.
-  if (res.data > 0) return { ok: true, affected: res.data };
-  return {
-    ok: false,
-    authExpired: false,
-    error: "delete-task ตอบ 0 แถว และเช็คซ้ำไม่ได้ — ยังไม่ลบในแอปเพื่อกันข้อมูลค้าง",
-  };
+  // 404: the row is already gone (or was never ours to see) — nothing is left behind.
+  if (res.status === 404) return { ok: true, affected: 0 };
+  if (!res.ok) return { ok: false, authExpired: false, error: describeFailure("delete task", res) };
+  return { ok: true, affected: 1 };
 }
 
-/** Does the remote row still exist? null when the check itself failed. */
-async function rowExists(creds: Credentials, card: Card): Promise<boolean | null> {
-  const check = await searchTasks({
-    jwt: creds.jwt,
-    email: creds.email,
-    startDate: card.tasksDate,
-    endDate: card.tasksDate,
-  });
-  if (!check.ok) return null;
-  return check.data.some((t) => String(t.id) === card.remoteTaskId);
+export type RemoteRange =
+  | { ok: true; tasks: RemoteTaskLike[]; lookups: Lookups }
+  | { ok: false; authExpired: boolean; error: string };
+
+/** The user's real workload rows for a range, with type/project names resolved. */
+export async function fetchRemoteRange(
+  jwt: string,
+  userId: number,
+  fromYMD: string,
+  toYMD: string,
+): Promise<RemoteRange> {
+  const [tasks, loaded] = await Promise.all([
+    listMyTasks({ jwt, userId, from: fromYMD, to: toYMD }),
+    loadLookups(jwt),
+  ]);
+  if (tasks.authExpired) return { ok: false, authExpired: true, error: "JWT หมดอายุ" };
+  if (!tasks.ok) return { ok: false, authExpired: false, error: describeFailure("tasks", tasks) };
+  if (!loaded.ok) return loaded;
+
+  const typeName = new Map(loaded.lookups.taskTypes.map((t) => [t.id, t.name]));
+  const projectName = new Map(loaded.lookups.projects.map((p) => [p.id, p.name]));
+  return {
+    ok: true,
+    lookups: loaded.lookups,
+    tasks: tasks.data.map((task) => ({
+      id: task.id,
+      legacyId: task.legacyId,
+      workDate: task.workDate,
+      durationSec: task.durationSec,
+      title: task.title,
+      noteHtml: task.noteHtml,
+      taskType: typeName.get(task.taskTypeId) ?? `#${task.taskTypeId}`,
+      website: task.projectId === null ? null : (projectName.get(task.projectId) ?? null),
+      clickupTask: task.clickupTaskId,
+    })),
+  };
 }
 
 export type ReconcileSummary = {
@@ -144,17 +133,15 @@ export async function reconcileRange(
   fromYMD: string,
   toYMD: string,
 ): Promise<ReconcileSummary | { missing: string } | { error: string; authExpired: boolean }> {
-  const creds = credentials();
-  if ("missing" in creds) return creds;
+  const account = workloadAccount();
+  if ("missing" in account) return account;
 
-  const res = await searchTasks({
-    jwt: creds.jwt,
-    email: creds.email,
-    startDate: fromYMD,
-    endDate: toYMD,
-  });
-  if (res.authExpired) return { error: "JWT หมดอายุ — วางใหม่ในหน้า Settings", authExpired: true };
-  if (!res.ok) return { error: `workload API ตอบ ${res.status}`, authExpired: false };
+  const remote = await fetchRemoteRange(account.jwt, account.identity.userId, fromYMD, toYMD);
+  if (!remote.ok) {
+    return remote.authExpired
+      ? { error: "JWT หมดอายุ — วางใหม่ในหน้า Settings", authExpired: true }
+      : { error: `workload API: ${remote.error}`, authExpired: false };
+  }
 
   const db = getDb();
   const localCards = db
@@ -163,34 +150,8 @@ export async function reconcileRange(
     .where(and(gte(schema.cards.tasksDate, fromYMD), lte(schema.cards.tasksDate, toYMD)))
     .all();
 
-  const actions = planReconcile({
-    localCards: localCards.map((c) => ({
-      id: c.id,
-      tasksDate: c.tasksDate,
-      durationSec: c.durationSec,
-      noteHtml: c.noteHtml,
-      taskType: c.taskType,
-      website: c.website,
-      clickupTask: c.clickupTask,
-      status: c.status,
-      remoteTaskId: c.remoteTaskId,
-    })),
-    remoteTasks: res.data.map(toRemoteLike),
-  });
-
-  return applyActions(actions, localCards, res.data.length);
-}
-
-function toRemoteLike(task: RemoteTask) {
-  return {
-    id: task.id,
-    tasks_date: task.tasks_date.slice(0, 10),
-    duration: task.duration,
-    note: task.note,
-    task_type: task.task_type,
-    website: task.website,
-    clickup_task: task.clickup_task,
-  };
+  const actions = planReconcile({ localCards, remoteTasks: remote.tasks });
+  return applyActions(actions, localCards, remote.tasks.length);
 }
 
 function applyActions(
@@ -224,6 +185,7 @@ function applyActions(
       db.update(schema.cards)
         .set({
           durationSec: action.fields.durationSec,
+          ...(action.fields.topic ? { topic: action.fields.topic } : {}),
           noteHtml: action.fields.noteHtml,
           taskType: action.fields.taskType,
           website: action.fields.website,
@@ -239,21 +201,21 @@ function applyActions(
     }
     if (action.kind === "import") {
       const remote = action.remote;
-      const durationSec = Number(remote.duration) || 0;
-      const topic = stripHtml(remote.note).slice(0, 80) || "งานจาก workload";
+      const topic =
+        remote.title.trim() || stripHtml(remote.noteHtml).slice(0, 80) || "งานจาก workload";
       db.insert(schema.cards)
         .values({
-          tasksDate: remote.tasks_date,
-          durationSec,
+          tasksDate: remote.workDate,
+          durationSec: remote.durationSec,
           topic,
-          noteHtml: sanitizeNoteHtml(remote.note),
-          taskType: remote.task_type,
+          noteHtml: sanitizeNoteHtml(remote.noteHtml),
+          taskType: remote.taskType,
           website: remote.website,
-          clickupTask: remote.clickup_task,
+          clickupTask: remote.clickupTask,
           origin: "manual",
           confidence: 1,
           evidence: { commits: [], tasks: [] },
-          fingerprint: fingerprintCard(remote.tasks_date, `remote-${remote.id}`, remote.task_type),
+          fingerprint: fingerprintCard(remote.workDate, `remote-${remote.id}`, remote.taskType),
           status: "submitted",
           remoteTaskId: String(remote.id),
           internalNote: "ดึงมาจาก workload (ไม่ได้สร้างในแอปนี้)",

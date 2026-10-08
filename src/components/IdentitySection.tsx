@@ -2,23 +2,15 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Button, Chip, Label, Select, Spinner } from "./ui";
+import { Button, Chip, Label, Spinner } from "./ui";
 
-/** Identity: which git users are me, and which workload employee I upload as.
- *  The two must be the same person — commits are the evidence, the workload
- *  create-task-list payload is where it lands. */
-export function IdentitySection({
-  taskBy,
-  email,
-  onPickEmployee,
-}: {
-  taskBy: string;
-  email: string;
-  onPickEmployee: (employee: { name: string; email: string }) => void;
-}) {
+/** Identity: which git users are me, and which workload account the report
+ *  lands under (the JWT's owner). The two must be the same person — commits
+ *  are the evidence, the workload account is where it is written. */
+export function IdentitySection() {
   const queryClient = useQueryClient();
   const authorsQuery = useQuery({ queryKey: ["gitAuthors"], queryFn: () => api.gitAuthors(), retry: 0 });
-  const employeesQuery = useQuery({ queryKey: ["employees"], queryFn: api.employees, retry: 0 });
+  const meQuery = useQuery({ queryKey: ["workloadMe"], queryFn: api.me, retry: 0 });
 
   const selected = authorsQuery.data?.selected ?? [];
   const isSelected = (author: { email: string; name: string }) =>
@@ -29,7 +21,7 @@ export function IdentitySection({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["gitAuthors"] });
       queryClient.invalidateQueries({ queryKey: ["settings"] });
-      queryClient.invalidateQueries({ queryKey: ["employees"] });
+      queryClient.invalidateQueries({ queryKey: ["workloadMe"] });
     },
   });
 
@@ -38,7 +30,7 @@ export function IdentitySection({
     saveAuthors.mutate(on ? [...without, authorEmail] : without);
   };
 
-  const identity = employeesQuery.data?.identity;
+  const identity = meQuery.data?.identity;
   // A shared repo has dozens of contributors; ours belong at the top, and the
   // rest stays reachable behind a scroll rather than filling the page.
   const authors = [...(authorsQuery.data?.authors ?? [])].sort(
@@ -106,40 +98,34 @@ export function IdentitySection({
 
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
-          <span className="text-[13px] font-medium">ฉันคือพนักงานคนนี้</span>
+          <span className="text-[13px] font-medium">บัญชี workload ที่ส่งรายงาน</span>
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => queryClient.invalidateQueries({ queryKey: ["employees"] })}
-            disabled={employeesQuery.isFetching}
+            onClick={() => queryClient.invalidateQueries({ queryKey: ["workloadMe"] })}
+            disabled={meQuery.isFetching}
           >
-            {employeesQuery.isFetching && <Spinner />} โหลดรายชื่อ
+            {meQuery.isFetching && <Spinner />} ตรวจอีกครั้ง
           </Button>
         </div>
-        {employeesQuery.isError ? (
-          <p className="text-[12px] text-muted">
-            {(employeesQuery.error as Error).message} — กรอกชื่อและอีเมลเองด้านบนได้
-          </p>
+        {meQuery.isError ? (
+          <p className="text-[12px] text-muted">{(meQuery.error as Error).message}</p>
         ) : (
-          <Select
-            value={email}
-            onChange={(e) => {
-              const picked = employeesQuery.data?.employees.find((emp) => emp.email === e.target.value);
-              if (picked) onPickEmployee({ name: picked.name, email: picked.email });
-            }}
-            className="w-full"
-            aria-label="เลือกพนักงาน"
-          >
-            <option value="">เลือกชื่อ</option>
-            {employeesQuery.data?.employees.map((emp) => (
-              <option key={emp.id} value={emp.email}>
-                {emp.name} · {emp.email}
-              </option>
-            ))}
-          </Select>
+          meQuery.data && (
+            <p className="text-[13px]">
+              <b>{meQuery.data.me.name}</b>{" "}
+              <span className="font-mono text-xs text-muted">{meQuery.data.me.email}</span>
+              {meQuery.data.me.positions.length > 0 && (
+                <span className="text-[12px] text-muted">
+                  {" "}
+                  · {meQuery.data.me.positions.map((p) => p.name).join(", ")}
+                </span>
+              )}
+            </p>
+          )
         )}
         <p className="text-[12px] text-muted">
-          ใช้อยู่ <b>{taskBy || "ยังไม่ได้ตั้ง"}</b> · {email || "ยังไม่ได้ตั้ง"}
+          มาจากโทเคนด้านบน — อยากส่งในนามคนอื่นต้องใช้โทเคนของคนนั้น
         </p>
       </div>
     </section>

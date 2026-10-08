@@ -2,9 +2,7 @@ import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/db/client";
 
 export const SETTING_KEYS = [
-  "jwt",
-  "task_by",
-  "email",
+  "jwt", // workload v2 access token — identity (who rows are written as) comes from it
   "clickup_token",
   "clickup_team_id",
   "clickup_user_id",

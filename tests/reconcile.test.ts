@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
 import {
-  decideWriteOutcome,
   planReconcile,
   type LocalCardLike,
   type RemoteTaskLike,
@@ -10,6 +9,7 @@ const local = (over: Partial<LocalCardLike> = {}): LocalCardLike => ({
   id: 1,
   tasksDate: "2026-08-19",
   durationSec: 7200,
+  topic: "แยก discount",
   noteHtml: "<p><b>[DEV-6395] discount</b></p><ul><li>ทำ</li></ul>",
   taskType: "Ket-CMS",
   website: null,
@@ -21,12 +21,14 @@ const local = (over: Partial<LocalCardLike> = {}): LocalCardLike => ({
 
 const remote = (over: Partial<RemoteTaskLike> = {}): RemoteTaskLike => ({
   id: 555,
-  tasks_date: "2026-08-19",
-  duration: 7200,
-  note: "<p><b>[DEV-6395] discount</b></p><ul><li>ทำ</li></ul>",
-  task_type: "Ket-CMS",
+  legacyId: null,
+  workDate: "2026-08-19",
+  durationSec: 7200,
+  title: "แยก discount",
+  noteHtml: "<p><b>[DEV-6395] discount</b></p><ul><li>ทำ</li></ul>",
+  taskType: "Ket-CMS",
   website: null,
-  clickup_task: "DEV-6395",
+  clickupTask: "DEV-6395",
   ...over,
 });
 
@@ -46,7 +48,7 @@ describe("planReconcile — the list must match what is really on workload", () 
   test("remote wins when a submitted card drifted from the real row", () => {
     const actions = planReconcile({
       localCards: [local()],
-      remoteTasks: [remote({ duration: 10800, note: "<p>แก้จากหน้าเว็บ workload</p>" })],
+      remoteTasks: [remote({ durationSec: 10800, noteHtml: "<p>แก้จากหน้าเว็บ workload</p>" })],
     });
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
@@ -67,7 +69,7 @@ describe("planReconcile — the list must match what is really on workload", () 
   test("imports rows that exist on workload but not locally", () => {
     const actions = planReconcile({
       localCards: [],
-      remoteTasks: [remote({ id: 777, note: "<p>กรอกมือจากหน้าเว็บ</p>" })],
+      remoteTasks: [remote({ id: 777, noteHtml: "<p>กรอกมือจากหน้าเว็บ</p>" })],
     });
     expect(actions).toEqual([{ kind: "import", remote: expect.objectContaining({ id: 777 }) }]);
   });
@@ -102,30 +104,60 @@ describe("planReconcile — the list must match what is really on workload", () 
     expect(actions.filter((a) => a.kind === "orphan")).toHaveLength(1);
   });
 
-  test("string durations from the API are compared numerically", () => {
+  test("a title edited on the website is taken back", () => {
     const actions = planReconcile({
       localCards: [local()],
-      remoteTasks: [remote({ duration: "7200" })],
+      remoteTasks: [remote({ title: "ชื่อใหม่จากหน้าเว็บ" })],
+    });
+    expect(actions).toEqual([
+      expect.objectContaining({ kind: "update-local", fields: expect.objectContaining({ topic: "ชื่อใหม่จากหน้าเว็บ" }) }),
+    ]);
+  });
+
+  test("a topic that was only trimmed on upload is not drift", () => {
+    const actions = planReconcile({
+      localCards: [local({ topic: "  แยก   discount " })],
+      remoteTasks: [remote()],
     });
     expect(actions).toEqual([]);
   });
 });
 
-describe("decideWriteOutcome — 0 rows affected is ambiguous", () => {
-  test("rows affected > 0 is unambiguously fine", () => {
-    expect(decideWriteOutcome({ affected: 1, rowStillOnRemote: null })).toBe("ok");
+describe("planReconcile — cards submitted to the old workload", () => {
+  test("re-links a v1 id through the legacyId the migrated v2 row keeps", () => {
+    const actions = planReconcile({
+      localCards: [local({ remoteTaskId: "v1:34975" })],
+      remoteTasks: [remote({ id: 9001, legacyId: 34975 })],
+    });
+    expect(actions).toEqual([{ kind: "link", cardId: 1, remoteTaskId: "9001" }]);
   });
 
-  test("0 rows but the row is still there = a no-op write, not a failure", () => {
-    expect(decideWriteOutcome({ affected: 0, rowStillOnRemote: true })).toBe("ok");
+  test("a v1 id is never matched to a v2 row that merely has the same number", () => {
+    const actions = planReconcile({
+      localCards: [local({ remoteTaskId: "v1:555", noteHtml: "<p>อย่างอื่น</p>" })],
+      remoteTasks: [remote({ id: 555, legacyId: null })],
+    });
+    expect(actions).toContainEqual({ kind: "orphan", cardId: 1 });
+    expect(actions).toContainEqual({ kind: "import", remote: expect.objectContaining({ id: 555 }) });
   });
 
-  test("0 rows and the row is gone = the remote row was deleted", () => {
-    expect(decideWriteOutcome({ affected: 0, rowStillOnRemote: false })).toBe("row-missing");
+  test("keeps the card's topic over the title the migration cut out of the note", () => {
+    const actions = planReconcile({
+      localCards: [local({ remoteTaskId: "9001" })],
+      remoteTasks: [remote({ id: 9001, legacyId: 34975, title: "[DEV-6395] discountทำ" })],
+    });
+    expect(actions).toEqual([]);
   });
 
-  test("0 rows and the check failed = do not guess", () => {
-    expect(decideWriteOutcome({ affected: 0, rowStillOnRemote: null })).toBe("unknown");
+  test("a re-linked card that drifted takes the v2 values in the same pass", () => {
+    const actions = planReconcile({
+      localCards: [local({ remoteTaskId: "v1:34975" })],
+      remoteTasks: [remote({ id: 9001, legacyId: 34975, durationSec: 3600 })],
+    });
+    expect(actions).toEqual([
+      { kind: "link", cardId: 1, remoteTaskId: "9001" },
+      expect.objectContaining({ kind: "update-local", remoteTaskId: "9001", fields: expect.objectContaining({ durationSec: 3600 }) }),
+    ]);
   });
 });
 
@@ -137,7 +169,7 @@ describe("planReconcile — remote notes are untrusted input", () => {
   test("sanitises the note it takes from workload", () => {
     const actions = planReconcile({
       localCards: [local()],
-      remoteTasks: [remote({ note: XSS })],
+      remoteTasks: [remote({ noteHtml: XSS })],
     });
     const update = actions.find((a) => a.kind === "update-local");
     expect(update).toBeDefined();
@@ -152,7 +184,7 @@ describe("planReconcile — remote notes are untrusted input", () => {
     const sanitised = "<p>ok</p>";
     const actions = planReconcile({
       localCards: [local({ noteHtml: sanitised })],
-      remoteTasks: [remote({ note: '<p onclick="x()">ok</p>' })],
+      remoteTasks: [remote({ noteHtml: '<p onclick="x()">ok</p>' })],
     });
     expect(actions).toEqual([]);
   });

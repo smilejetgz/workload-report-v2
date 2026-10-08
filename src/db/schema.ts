@@ -23,7 +23,7 @@ export const projects = sqliteTable("projects", {
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
-// Key-value settings: jwt, task_by, email, clickup_token, clickup_team_id,
+// Key-value settings: jwt, clickup_token, clickup_team_id,
 // clickup_user_id, ai_model, default_daily_hours, rules_md
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
@@ -31,7 +31,8 @@ export const settings = sqliteTable("settings", {
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
-// Synced from workload API /tasks/get-tasktype. AI may only pick from this list.
+// Synced from workload API /task-types, narrowed to the types this user's
+// positions may log. AI may only pick from this list.
 export const taskTypes = sqliteTable("task_types", {
   id: integer("id").primaryKey(), // remote id
   name: text("name").notNull(),

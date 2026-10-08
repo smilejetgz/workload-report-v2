@@ -222,7 +222,11 @@ export function HomePage() {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
       return count;
     },
-    onSuccess: (count) => setNotice({ kind: "ok", text: `copy payload ${count} ใบแล้ว — วางใน curl/DevTools ได้เลย` }),
+    onSuccess: (count) =>
+      setNotice({
+        kind: "ok",
+        text: `copy payload ${count} ใบแล้ว — แต่ละวันคือ body ของ POST /api/tasks/batch บน workload`,
+      }),
     onError: (error) => setNotice({ kind: "error", text: (error as Error).message }),
   });
 

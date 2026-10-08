@@ -10,7 +10,7 @@ import {
   setSetting,
   type SettingKey,
 } from "@/server/settings";
-import { jwtExpiry } from "@/server/sources/workload";
+import { jwtExpiry, jwtIdentity } from "@/server/sources/workload";
 
 export function GET() {
   return handle(() => {
@@ -26,18 +26,18 @@ export function GET() {
     }
     const jwt = getSetting("jwt");
     const expiry = jwt ? jwtExpiry(jwt) : null;
-    // employees: null → skip the directory checks here (that needs a live API
-    // call; /api/employees does the full version).
+    // Read from the token offline; /api/me asks the server.
+    const account = jwt ? jwtIdentity(jwt) : null;
     const identity = checkIdentity({
-      workloadEmail: getSetting("email"),
-      taskBy: getSetting("task_by"),
+      workloadEmail: account?.email ?? null,
+      workloadName: account?.name ?? null,
       gitAuthors: getSelectedAuthors(),
-      employees: null,
     });
     return ok({
       settings: out,
       gitAuthors: getSelectedAuthors(),
       identity,
+      account: account ? { name: account.name, email: account.email, role: account.role } : null,
       jwtExpiresAt: expiry?.toISOString() ?? null,
       jwtExpired: expiry ? expiry.getTime() < Date.now() : null,
     });

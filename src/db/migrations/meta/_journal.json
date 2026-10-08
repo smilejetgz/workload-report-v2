@@ -22,6 +22,13 @@
       "when": 1787287304897,
       "tag": "0002_glorious_vision",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791426591395,
+      "tag": "0003_v2_legacy_remote_ids",
+      "breakpoints": true
     }
   ]
 }

@@ -6,11 +6,13 @@
 // local change (status draft/approved/failed) is NOT overwritten.
 
 import { sanitizeNoteHtml } from "@/lib/sanitize";
+import { legacyRemoteId, titleForUpload } from "@/server/sources/workload";
 
 export type LocalCardLike = {
   id: number;
   tasksDate: string;
   durationSec: number;
+  topic: string;
   noteHtml: string;
   taskType: string;
   website: string | null;
@@ -19,18 +21,25 @@ export type LocalCardLike = {
   remoteTaskId: string | null;
 };
 
+/** A v2 task as this app sees it — ids already resolved to names. */
 export type RemoteTaskLike = {
   id: number;
-  tasks_date: string;
-  duration: number | string;
-  note: string;
-  task_type: string;
+  /** Row id on the old workload, kept by the v2 data migration. */
+  legacyId: number | null;
+  workDate: string;
+  durationSec: number;
+  title: string;
+  noteHtml: string;
+  taskType: string;
+  /** Project name; the app keeps it in the card's website field. */
   website: string | null;
-  clickup_task: string | null;
+  clickupTask: string | null;
 };
 
 export type RemoteFields = {
   durationSec: number;
+  /** null = keep the local topic (see remoteFields). */
+  topic: string | null;
   noteHtml: string;
   taskType: string;
   website: string | null;
@@ -55,19 +64,25 @@ function plainNote(html: string): string {
 
 function remoteFields(remote: RemoteTaskLike): RemoteFields {
   return {
-    durationSec: Number(remote.duration) || 0,
+    durationSec: remote.durationSec,
+    // A row migrated from the old workload got a title the migration cut out
+    // of its note text (v1 had no title), so the card's own topic is the
+    // better label. Titles of rows born on v2 are real and are taken.
+    topic: remote.legacyId === null ? remote.title : null,
     // Sanitised here rather than at write time so the drift comparison below
     // is like-for-like — otherwise every sync would "fix" the same card again.
-    noteHtml: sanitizeNoteHtml(remote.note),
-    taskType: remote.task_type,
+    noteHtml: sanitizeNoteHtml(remote.noteHtml),
+    taskType: remote.taskType,
     website: remote.website ?? null,
-    clickupTask: remote.clickup_task ?? null,
+    clickupTask: remote.clickupTask ?? null,
   };
 }
 
 function differs(card: LocalCardLike, fields: RemoteFields): boolean {
   return (
     card.durationSec !== fields.durationSec ||
+    // The upload trims and caps the title, so compare what was really sent.
+    (fields.topic !== null && (titleForUpload(card.topic) ?? "") !== fields.topic) ||
     card.noteHtml !== fields.noteHtml ||
     card.taskType !== fields.taskType ||
     (card.website ?? null) !== fields.website ||
@@ -93,19 +108,25 @@ export function planReconcile(input: {
     if (card.remoteTaskId) byRemoteId.set(card.remoteTaskId, card);
   }
 
-  // 1. Exact match on the stored remote id.
+  // 1. Exact match on the stored remote id — or, for a card submitted to the
+  //    old workload, on the v1 id the migrated row still remembers.
   for (const remote of input.remoteTasks) {
-    const card = byRemoteId.get(String(remote.id));
-    if (!card) continue;
+    const card =
+      byRemoteId.get(String(remote.id)) ??
+      (remote.legacyId !== null ? byRemoteId.get(legacyRemoteId(remote.legacyId)) : undefined);
+    if (!card || matched.has(card.id)) continue;
     matched.set(card.id, remote);
     takenRemote.add(remote.id);
+    if (card.remoteTaskId !== String(remote.id)) {
+      actions.push({ kind: "link", cardId: card.id, remoteTaskId: String(remote.id) });
+    }
   }
 
   // 2. Submitted cards without an id: match on date + duration + note text.
   const fuzzyPool = new Map<string, RemoteTaskLike[]>();
   for (const remote of input.remoteTasks) {
     if (takenRemote.has(remote.id)) continue;
-    const key = fuzzyKey(remote.tasks_date, Number(remote.duration) || 0, remote.note);
+    const key = fuzzyKey(remote.workDate, remote.durationSec, remote.noteHtml);
     fuzzyPool.set(key, [...(fuzzyPool.get(key) ?? []), remote]);
   }
   for (const card of input.localCards) {
@@ -145,18 +166,4 @@ export function planReconcile(input: {
   }
 
   return actions;
-}
-
-/** A 200 from update-task/delete-task carries a rows-affected count, and 0 is
- *  ambiguous: the row may be gone, or the values may simply be unchanged. Only
- *  a re-read of the day can tell the two apart. */
-export function decideWriteOutcome(input: {
-  affected: number;
-  /** null = the verifying read failed, so we cannot tell. */
-  rowStillOnRemote: boolean | null;
-}): "ok" | "row-missing" | "unknown" {
-  if (input.affected > 0) return "ok";
-  if (input.rowStillOnRemote === true) return "ok"; // no-op write, row is there
-  if (input.rowStillOnRemote === false) return "row-missing";
-  return "unknown";
 }

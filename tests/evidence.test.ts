@@ -239,14 +239,14 @@ describe("hasDayEvidence — what counts as proof that work happened", () => {
       remoteTasks: [
         {
           id: 1,
-          tasks_date: DATE,
-          duration: 3600,
-          note: "<p>x</p>",
+          legacyId: null,
+          workDate: DATE,
+          durationSec: 3600,
+          title: "x",
+          noteHtml: "<p>x</p>",
+          taskType: "Ket-CMS",
           website: null,
-          task_by: "me",
-          task_type: "Ket-CMS",
-          email: null,
-          clickup_task: null,
+          clickupTask: null,
         },
       ],
     });

@@ -8,7 +8,9 @@ import { filterMyCommits } from "./authors";
 import { resolveDayTargets, type ResolvedDayTarget } from "./day-targets";
 import { getDefaultDailySec, getSetting } from "./settings";
 import { refreshEvidence } from "./sync";
-import { getTaskTypes, searchTasks, type RemoteTask } from "./sources/workload";
+import { fetchRemoteRange } from "./remote-sync";
+import type { RemoteTaskLike } from "./engine/reconcile";
+import { syncAllowedTaskTypes, workloadAccount } from "./workload-account";
 import { resolveClickupLink } from "./engine/clickup-link";
 import { buildDayEvidence, hasDayEvidence, type DayEvidence } from "./engine/evidence";
 import { buildDayPrompt } from "./engine/prompt";
@@ -101,7 +103,7 @@ export async function executeRun(
     const { remoteTasks, remoteWarning } = await fetchRemoteTasks(fromYMD, toYMD);
     if (remoteWarning) log("warn", remoteWarning);
     else log("info", `เช็คของที่อยู่บน workload แล้ว ${remoteTasks.length} รายการ`);
-    const taskTypeNames = await ensureTaskTypes();
+    const taskTypeNames = await ensureTaskTypes(log);
     log("info", `ประเภทงานที่เลือกได้ ${taskTypeNames.length} แบบ`);
 
     for (const date of regenerate) {
@@ -239,36 +241,28 @@ async function loadSharedContext(fromYMD: string, toYMD: string): Promise<Shared
 async function fetchRemoteTasks(
   fromYMD: string,
   toYMD: string,
-): Promise<{ remoteTasks: RemoteTask[]; remoteWarning: string | null }> {
-  const jwt = getSetting("jwt");
-  const email = getSetting("email");
-  if (!jwt || !email) {
-    return { remoteTasks: [], remoteWarning: "ไม่มี JWT/email — ข้ามการเช็คงานที่ส่งไปแล้ว" };
+): Promise<{ remoteTasks: RemoteTaskLike[]; remoteWarning: string | null }> {
+  const account = workloadAccount();
+  if ("missing" in account) {
+    return { remoteTasks: [], remoteWarning: `ไม่มี ${account.missing} — ข้ามการเช็คงานที่ส่งไปแล้ว` };
   }
-  const res = await searchTasks({ jwt, email, startDate: fromYMD, endDate: toYMD });
-  if (res.authExpired) return { remoteTasks: [], remoteWarning: "JWT หมดอายุ — เช็คซ้ำไม่ได้" };
-  if (!res.ok) return { remoteTasks: [], remoteWarning: `workload API ตอบ ${res.status}` };
-  return { remoteTasks: res.data, remoteWarning: null };
+  const res = await fetchRemoteRange(account.jwt, account.identity.userId, fromYMD, toYMD);
+  if (!res.ok) {
+    return {
+      remoteTasks: [],
+      remoteWarning: res.authExpired ? "JWT หมดอายุ — เช็คซ้ำไม่ได้" : `workload API: ${res.error}`,
+    };
+  }
+  return { remoteTasks: res.tasks, remoteWarning: null };
 }
 
-async function ensureTaskTypes(): Promise<string[]> {
-  const db = getDb();
-  const jwt = getSetting("jwt");
-  if (jwt) {
-    const res = await getTaskTypes(jwt);
-    if (res.ok) {
-      for (const t of res.data) {
-        db.insert(schema.taskTypes)
-          .values({ id: t.id, name: t.tasks_propose, color: t.color, syncedAt: new Date() })
-          .onConflictDoUpdate({
-            target: schema.taskTypes.id,
-            set: { name: t.tasks_propose, color: t.color, syncedAt: new Date() },
-          })
-          .run();
-      }
-    }
+async function ensureTaskTypes(log: RunLogger): Promise<string[]> {
+  const account = workloadAccount();
+  if (!("missing" in account)) {
+    const res = await syncAllowedTaskTypes(account.jwt);
+    if (!res.ok) log("warn", `ดึงประเภทงานจาก workload ไม่ได้ (${res.error}) — ใช้รายการเดิม`);
   }
-  const names = db
+  const names = getDb()
     .select()
     .from(schema.taskTypes)
     .all()
@@ -282,7 +276,7 @@ async function ensureTaskTypes(): Promise<string[]> {
 async function generateDay(input: {
   runId: number;
   day: ResolvedDayTarget;
-  remoteTasks: RemoteTask[];
+  remoteTasks: RemoteTaskLike[];
   taskTypeNames: string[];
   shared: SharedContext;
   provider: AiProvider;
@@ -305,8 +299,8 @@ async function generateDay(input: {
   }
 
   const remoteSec = input.remoteTasks
-    .filter((t) => t.tasks_date.slice(0, 10) === day.date)
-    .reduce((s, t) => s + (Number(t.duration) || 0), 0);
+    .filter((t) => t.workDate === day.date)
+    .reduce((s, t) => s + t.durationSec, 0);
   const submittedSec = existing
     .filter((c) => c.status === "submitted")
     .reduce((s, c) => s + c.durationSec, 0);
