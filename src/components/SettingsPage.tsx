@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
+import { DEFAULT_AI_MODEL } from "@/lib/ai-defaults";
 import { api } from "@/lib/api";
 import { IdentitySection } from "./IdentitySection";
 import { ThemeToggle } from "./ThemeToggle";
@@ -204,9 +205,9 @@ export function SettingsPage() {
         <section className="space-y-3 rounded-xl border border-border bg-surface p-3.5">
           <Label>การสร้างรายงาน</Label>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="โมเดล" hint="เว้นว่างเพื่อใช้ค่าเริ่มต้น">
+            <Field label="โมเดล" hint={`เว้นว่างเพื่อใช้ค่าเริ่มต้น ${DEFAULT_AI_MODEL}`}>
               <Input
-                placeholder="เช่น sonnet"
+                placeholder={DEFAULT_AI_MODEL}
                 value={value("ai_model")}
                 onChange={(e) => set("ai_model", e.target.value)}
                 className="w-full font-mono"

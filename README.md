@@ -11,6 +11,9 @@ AI (claude CLI) วิเคราะห์ git commits + ClickUp activity แ�
 - **Drizzle + better-sqlite3** (`data/app.db`) — ⚠️ Node เท่านั้น: ห้ามรันโค้ด DB ด้วย Bun runtime
   (better-sqlite3 crash ใต้ bun 1.2.x) — bun ใช้เป็น package manager, script รันผ่าน `tsx`
 - **claude CLI** (`claude -p`) เป็น AI provider — ต้องมี `claude` บน PATH
+  โมเดลค่าเริ่มต้น `claude-sonnet-5-5[1m]` (เปลี่ยนได้ในหน้า Settings) · เปิด CLI ค้างไว้ต่อ worker
+  แล้วป้อนทีละวันผ่าน stream-json — คำสั่งคงที่อยู่ใน system prompt (`--append-system-prompt`)
+  จึงถูกอ่านจาก prompt cache ทุกวันถัดไป; session ถูกปลดหลัง 8 วันเพื่อไม่ให้ history โต
 - `.mcp.json` มี `next-devtools-mcp` สำหรับ debug ผ่าน Claude Code
 
 ## เริ่มใช้

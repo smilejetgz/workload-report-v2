@@ -17,7 +17,7 @@ import { buildDayPrompt } from "./engine/prompt";
 import { parseDayPlan, validateDayPlan, type DayPlan } from "./engine/validator";
 import { allocate, MAX_CARD_SEC, STEP_SEC } from "./engine/allocator";
 import type { AiProvider } from "./ai/provider";
-import { isTransientAiError } from "./ai/cli";
+import { DEFAULT_AI_MODEL, isTransientAiError } from "./ai/cli";
 import { sumUsage, type AiUsage } from "./ai/usage";
 import { appendLog, type RunLogger } from "./run-log";
 
@@ -124,7 +124,7 @@ export async function executeRun(
     log(
       "info",
       `หลักฐานในช่วงนี้: ${shared.commits.length} commit ของเรา · ${shared.tasks.length} task ใน ClickUp` +
-        (shared.aiModel ? ` · โมเดล ${shared.aiModel}` : " · โมเดลค่าเริ่มต้นของ CLI"),
+        ` · โมเดล ${shared.aiModel}`,
     );
     const queue = [...workDays];
     const failures: string[] = [...sync.warnings];
@@ -194,6 +194,9 @@ export async function executeRun(
       error: error instanceof Error ? error.message : String(error),
       finishedAt: new Date(),
     });
+  } finally {
+    // Long-lived CLI sessions belong to this run; don't leave them running.
+    provider.close?.();
   }
 }
 
@@ -206,7 +209,7 @@ type SharedContext = {
   events: (typeof schema.clickupEvents.$inferSelect)[];
   styleExamples: (typeof schema.styleExamples.$inferSelect)[];
   rulesMd: string | null;
-  aiModel: string | null;
+  aiModel: string;
 };
 
 async function loadSharedContext(fromYMD: string, toYMD: string): Promise<SharedContext> {
@@ -234,7 +237,7 @@ async function loadSharedContext(fromYMD: string, toYMD: string): Promise<Shared
       .all(),
     styleExamples: db.select().from(schema.styleExamples).all().slice(-20).reverse(),
     rulesMd: getSetting("rules_md"),
-    aiModel: getSetting("ai_model"),
+    aiModel: getSetting("ai_model")?.trim() || DEFAULT_AI_MODEL,
   };
 }
 
@@ -445,6 +448,8 @@ async function generateValidPlan(
   let transientRetries = 0;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS + MAX_TRANSIENT_RETRIES; attempt++) {
+    // The system part is identical for every day of the run, so the CLI
+    // session reads it from the prompt cache; only `user` is new each day.
     const prompt = buildDayPrompt({
       evidence,
       taskTypeNames: input.taskTypeNames,
@@ -458,9 +463,12 @@ async function generateValidPlan(
     let usage: AiUsage | null = null;
     let callError: string | null = null;
     let isTransient = false;
-    log("info", `${input.day.date}: เรียก AI ครั้งที่ ${attempt} (prompt ${fmtTokens(prompt.length)} ตัวอักษร)`);
+    log("info", `${input.day.date}: เรียก AI ครั้งที่ ${attempt} (prompt ${fmtTokens(prompt.user.length)} ตัวอักษร)`);
     try {
-      const result = await input.provider.generate(prompt, { model: input.shared.aiModel });
+      const result = await input.provider.generate(prompt.user, {
+        model: input.shared.aiModel,
+        system: prompt.system,
+      });
       raw = result.text;
       durationMs = result.durationMs;
       usage = result.usage ?? null;
@@ -468,7 +476,7 @@ async function generateValidPlan(
         input.usages.push(usage);
         log(
           "info",
-          `${input.day.date}: ${usage.model ?? "โมเดลค่าเริ่มต้น"} · ` +
+          `${input.day.date}: ${usage.model ?? input.shared.aiModel} · ` +
             `เข้า ${fmtTokens(usage.inputTokens)} ออก ${fmtTokens(usage.outputTokens)} ` +
             `แคช ${fmtTokens(usage.cacheReadTokens + usage.cacheCreationTokens)} · ` +
             `${(durationMs / 1000).toFixed(1)} วิ` +
@@ -497,10 +505,10 @@ async function generateValidPlan(
         runId: input.runId,
         date: input.day.date,
         attempt,
-        prompt,
+        prompt: `${prompt.system}\n\n----- day message -----\n\n${prompt.user}`,
         rawOutput: raw || null,
         durationMs,
-        model: usage?.model ?? input.shared.aiModel ?? null,
+        model: usage?.model ?? input.shared.aiModel,
         inputTokens: usage?.inputTokens ?? null,
         outputTokens: usage?.outputTokens ?? null,
         cacheReadTokens: usage?.cacheReadTokens ?? null,

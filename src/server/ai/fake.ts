@@ -1,11 +1,14 @@
 // Deterministic AiProvider for tests and integration runs without a real model.
 
-import type { AiProvider, AiResult } from "./provider";
+import type { AiGenerateOptions, AiProvider, AiResult } from "./provider";
 
 type QueueItem = { kind: "text"; text: string } | { kind: "error"; error: Error };
 
 export class FakeProvider implements AiProvider {
   public prompts: string[] = [];
+  /** The system prompt each call carried, in call order. */
+  public systems: (string | null)[] = [];
+  public closed = 0;
   private queue: QueueItem[] = [];
   private fallback: ((prompt: string) => string) | null = null;
 
@@ -22,12 +25,17 @@ export class FakeProvider implements AiProvider {
     this.fallback = fn;
   }
 
-  async generate(prompt: string): Promise<AiResult> {
+  async generate(prompt: string, opts?: AiGenerateOptions): Promise<AiResult> {
     this.prompts.push(prompt);
+    this.systems.push(opts?.system ?? null);
     const queued = this.queue.shift();
     if (queued?.kind === "error") throw queued.error;
     if (queued?.kind === "text") return { text: queued.text, durationMs: 1 };
     if (this.fallback) return { text: this.fallback(prompt), durationMs: 1 };
     throw new Error("FakeProvider: no response queued");
+  }
+
+  close(): void {
+    this.closed += 1;
   }
 }
