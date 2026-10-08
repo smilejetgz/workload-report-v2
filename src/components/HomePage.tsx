@@ -2,7 +2,8 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChatAttachment } from "@/db/schema";
 import { api } from "@/lib/api";
 import {
   countUploadStates,
@@ -20,6 +21,7 @@ import { DaySection } from "./DaySection";
 import { CoveragePanel } from "./CoveragePanel";
 import { CalendarPanel } from "./CalendarPanel";
 import { GenerateProgress } from "./GenerateProgress";
+import { ChatPanel, type ChatTarget } from "./ChatPanel";
 
 type Preset = { label: string; range: () => { from: string; to: string } };
 
@@ -60,6 +62,9 @@ export function HomePage() {
   // How many rows workload really had at the last sync — shown next to ours.
   const [lastRemoteCount, setLastRemoteCount] = useState<number | null>(null);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [chat, setChat] = useState<ChatTarget | null>(null);
+  const closeChat = useCallback(() => setChat(null), []);
+  const openChat = (target: Omit<ChatTarget, "nonce">) => setChat({ ...target, nonce: Date.now() });
 
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const taskTypesQuery = useQuery({ queryKey: ["taskTypes"], queryFn: api.taskTypes });
@@ -262,12 +267,36 @@ export function HomePage() {
     (d) => d.targetSec > 0 && d.plannedSec < d.targetSec,
   ).length;
 
+  const rangeTitle =
+    range.from === range.to
+      ? formatThaiDate(range.from)
+      : `${formatThaiDate(range.from)} – ${formatThaiDate(range.to)}`;
+  const openRangeChat = (draft?: string, attachments?: ChatAttachment[]) =>
+    openChat({ scope: `range:${range.from}:${range.to}`, title: rangeTitle, draft, attachments });
+
+  // Picked "possibly missed" items go to the chat of their day when they share
+  // one, otherwise to the whole range.
+  const fillWithAi = (attachments: ChatAttachment[], dates: (string | null)[]) => {
+    const draft =
+      "เติมรายการที่เลือกเข้ารายงาน — รวมเข้ากับรายการเดิมที่เป็นเรื่องเดียวกัน " +
+      "หรือสร้างรายการใหม่ แล้วปรับชั่วโมงให้แต่ละวันรวมเท่าเป้า";
+    const distinct = [...new Set(dates)];
+    if (distinct.length === 1 && distinct[0] && distinct[0] >= range.from && distinct[0] <= range.to) {
+      openChat({ scope: `day:${distinct[0]}`, title: formatThaiDate(distinct[0]), draft, attachments });
+    } else {
+      openRangeChat(draft, attachments);
+    }
+  };
+
   return (
     <main className="mx-auto w-full max-w-3xl flex-1 px-4 pb-32">
       <header className="sticky top-0 z-20 -mx-4 mb-4 flex items-center gap-3 border-b border-border bg-background/85 px-4 py-2.5 backdrop-blur">
         <h1 className="display text-[15px] font-bold">รายงานงาน</h1>
         <span className="font-mono text-[11px] text-muted">workload</span>
         <div className="ml-auto flex items-center gap-3">
+          <Button size="sm" disabled={runActive} onClick={() => openRangeChat()}>
+            แชทแก้รายงาน
+          </Button>
           <ThemeToggle />
           <Link
             href="/settings"
@@ -437,6 +466,14 @@ export function HomePage() {
             runPhase={runPhase}
             runStatus={dayRunStatus(day.date)}
             onRegenerate={(date) => generate.mutate([date])}
+            onOpenChat={(target) =>
+              target.kind === "day"
+                ? openChat({ scope: `day:${target.date}`, title: formatThaiDate(target.date) })
+                : openChat({
+                    scope: `card:${target.card.id}`,
+                    title: `${formatThaiDate(target.card.tasksDate)} · ${target.card.topic}`,
+                  })
+            }
           />
         ))}
         {data && data.days.length === 0 && (
@@ -447,7 +484,10 @@ export function HomePage() {
       {/* ── เครื่องมือรอง ───────────────────────────────────────────── */}
       {data && (
         <div className="mt-4 space-y-2">
-          <CoveragePanel coverage={data.coverage} />
+          <CoveragePanel
+            coverage={data.coverage}
+            onFillWithAi={({ attachments, dates }) => fillWithAi(attachments, dates)}
+          />
           <details className="rounded-xl border border-border bg-surface">
             <summary className="cursor-pointer px-3.5 py-2.5 text-[13px] font-medium">
               วันหยุดและวันลา
@@ -569,6 +609,7 @@ export function HomePage() {
           </div>
         </div>
       </div>
+      {chat && <ChatPanel key={chat.nonce} target={chat} onClose={closeChat} />}
     </main>
   );
 }

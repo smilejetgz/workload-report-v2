@@ -271,3 +271,87 @@ export type Run = typeof runs.$inferSelect;
 export type Card = typeof cards.$inferSelect;
 export type TaskType = typeof taskTypes.$inferSelect;
 export type DayTarget = typeof dayTargets.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Chat: ask the AI to change part of the report
+// ---------------------------------------------------------------------------
+
+/** "range:<from>:<to>" · "day:<date>" · "card:<id>" — what a thread may change. */
+export type ChatScopeKind = "range" | "day" | "card";
+
+export const chatThreads = sqliteTable(
+  "chat_threads",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    scopeKey: text("scope_key").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  },
+  (t) => [index("chat_threads_scope").on(t.scopeKey)],
+);
+
+/** One change the AI proposes. Hours are seconds, already checked by code. */
+export type ChatOp =
+  | {
+      op: "update";
+      cardId: number;
+      topic?: string;
+      noteHtml?: string;
+      taskType?: string;
+      durationSec?: number;
+      evidence?: CardEvidence;
+    }
+  | {
+      op: "create";
+      date: string;
+      topic: string;
+      noteHtml: string;
+      taskType: string;
+      durationSec: number;
+      evidence: CardEvidence;
+    }
+  | { op: "delete"; cardId: number };
+
+/** What the cards looked like when the proposal was made — for the diff and the stale check. */
+export type ChatCardSnapshot = {
+  id: number;
+  tasksDate: string;
+  topic: string;
+  noteHtml: string;
+  taskType: string;
+  durationSec: number;
+  status: string;
+  remoteTaskId: string | null;
+  updatedAt: number | null;
+};
+
+export type ChatProposal = { ops: ChatOp[]; before: ChatCardSnapshot[] };
+
+/** Coverage items the user picked to have the AI work into the report. */
+export type ChatAttachment =
+  | { kind: "commit"; hash: string; date: string; project: string; message: string }
+  | { kind: "task"; taskId: string; customId: string | null; name: string; date: string | null };
+
+export type ChatProposalStatus = "pending" | "applied" | "discarded";
+
+export const chatMessages = sqliteTable(
+  "chat_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    threadId: integer("thread_id")
+      .notNull()
+      .references(() => chatThreads.id, { onDelete: "cascade" }),
+    role: text("role").$type<"user" | "assistant">().notNull(),
+    text: text("text").notNull(),
+    attachments: text("attachments", { mode: "json" }).$type<ChatAttachment[]>(),
+    proposal: text("proposal", { mode: "json" }).$type<ChatProposal>(),
+    proposalStatus: text("proposal_status").$type<ChatProposalStatus>(),
+    /** Outcome of applying, shown under the proposal (remote sync failures etc.). */
+    applyNote: text("apply_note"),
+    error: text("error"),
+    createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  },
+  (t) => [index("chat_messages_thread").on(t.threadId)],
+);
+
+export type ChatThread = typeof chatThreads.$inferSelect;
+export type ChatMessage = typeof chatMessages.$inferSelect;

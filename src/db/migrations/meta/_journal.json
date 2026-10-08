@@ -29,6 +29,13 @@
       "when": 1791426591395,
       "tag": "0003_v2_legacy_remote_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791429748891,
+      "tag": "0004_chat",
+      "breakpoints": true
     }
   ]
 }

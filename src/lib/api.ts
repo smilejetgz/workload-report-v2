@@ -2,6 +2,8 @@
 
 import type {
   Card,
+  ChatAttachment,
+  ChatMessage,
   Project,
   Run,
   TaskType,
@@ -57,6 +59,8 @@ export type WorkloadMe = {
   me: { id: number; name: string; email: string; role: string; positions: { positionId: number; name: string }[] };
   identity: IdentityCheck;
 };
+
+export type ChatThreadData = { threadId: number | null; messages: ChatMessage[] };
 
 export type CardsData = { cards: Card[]; days: ResolvedDayTarget[]; coverage: CoverageReport };
 
@@ -131,6 +135,21 @@ export const api = {
       orphaned: number;
       remoteCount: number;
     }>("/api/reconcile", { method: "POST", body: JSON.stringify({ from, to }) }),
+
+  chatThread: (scope: string) =>
+    call<ChatThreadData>(`/api/chat?scope=${encodeURIComponent(scope)}`),
+  /** Waits for the AI — can take a minute. */
+  sendChat: (input: {
+    scope: string;
+    text: string;
+    attachments?: ChatAttachment[];
+    newThread?: boolean;
+  }) => call<ChatThreadData>("/api/chat", { method: "POST", body: JSON.stringify(input) }),
+  proposalAction: (messageId: number, action: "apply" | "discard") =>
+    call<{ applied: number; failed: string[] }>(`/api/chat/proposals/${messageId}`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
 
   generate: (input: {
     from: string;

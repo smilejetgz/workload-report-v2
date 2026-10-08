@@ -20,6 +20,7 @@ export function DaySection({
   /** This day's place in that run. "empty" = no evidence, left blank on purpose. */
   runStatus,
   onRegenerate,
+  onOpenChat,
 }: {
   day: ResolvedDayTarget;
   cards: Card[];
@@ -28,6 +29,8 @@ export function DaySection({
   runPhase?: "sync" | "generate";
   runStatus?: string;
   onRegenerate: (date: string) => void;
+  /** Open the AI chat for this day, or for one of its cards. */
+  onOpenChat: (target: { kind: "day"; date: string } | { kind: "card"; card: Card }) => void;
 }) {
   const queryClient = useQueryClient();
   const [isEditingTarget, setIsEditingTarget] = useState(false);
@@ -167,6 +170,15 @@ export function DaySection({
         )}
 
         <div className="ml-auto flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 sm:opacity-60 sm:hover:opacity-100">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={runActive}
+            onClick={() => onOpenChat({ kind: "day", date: day.date })}
+            title="สั่ง AI แก้รายการของวันนี้"
+          >
+            แชท
+          </Button>
           <Button size="sm" variant="ghost" onClick={() => setIsEditingTarget((v) => !v)}>
             เป้า
           </Button>
@@ -186,7 +198,12 @@ export function DaySection({
 
       <div className="mt-1">
         {cards.map((card) => (
-          <CardItem key={card.id} card={card} taskTypes={taskTypes} />
+          <CardItem
+            key={card.id}
+            card={card}
+            taskTypes={taskTypes}
+            onOpenChat={runActive ? undefined : (c) => onOpenChat({ kind: "card", card: c })}
+          />
         ))}
 
         {isWriting && cards.length === 0 && (
