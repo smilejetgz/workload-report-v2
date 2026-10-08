@@ -50,11 +50,11 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
   "date": "${evidence.date}",
   "cards": [
     {
-      "topic": "short plain-Thai headline a non-technical reader understands",
+      "topic": "short Thai headline a non-technical reader understands (technical terms stay in English)",
       "task_type": "one of the allowed task types",
       "website": null,
       "clickup_task": "custom id like DEV-6395 if the card is tied to one task, else null",
-      "note_html": "<p><b>[DEV-6395] ส่งโปรโมชันอัตโนมัติเมื่อมีออเดอร์</b></p><ul><li>ลูกค้าได้รับคูปองทันทีหลังสั่งซื้อ ไม่ต้องส่งเอง</li><li>รองรับการตั้งเงื่อนไขว่าออเดอร์แบบไหนถึงได้รับ</li></ul>",
+      "note_html": "<p><b>[DEV-6395] ส่ง coupon อัตโนมัติเมื่อมี order ใหม่</b></p><ul><li>ลูกค้าได้รับ coupon ทันทีหลังสั่งซื้อ ไม่ต้องส่งเอง</li><li>ตั้งเงื่อนไขได้ว่า order แบบไหนถึงได้รับ</li></ul>",
       "hours": 2.5,
       "time_of_day": "morning",
       "origin": "git",
@@ -62,7 +62,7 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
       "confidence": 0.9
     }
   ],
-  "reviewer_notes": "optional: anything the reviewer should know (Thai)"
+  "reviewer_notes": "optional: anything the reviewer should know (Thai, technical terms in English)"
 }
 
 ## Evidence priority (read this before anything else)
@@ -93,13 +93,20 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
   stopped happening. Never name a file, a function, a database column, a branch, a flag
   or an internal status code; those say nothing to the reader. Translate them into the
   situation they affect.
-    good: <li>ลูกค้าแก้ที่อยู่จัดส่งเองได้ในขั้นตอนที่รอจัดส่ง</li>
+    good: <li>ลูกค้าแก้ shipping address เองได้ระหว่างรอจัดส่ง</li>
     bad:  <li>ปรับเงื่อนไขใน edit_order_shipping_address ของ orders service</li>
-    good: <li>หน้ารายการสินค้าโหลดเร็วขึ้นเมื่อร้านมีสินค้าจำนวนมาก</li>
+    good: <li>หน้า product list โหลดเร็วขึ้นเมื่อร้านมีสินค้าจำนวนมาก</li>
     bad:  <li>ตัด query ที่โตตามปริมาณข้อมูลใน evaluate_order</li>
-- LANGUAGE: plain Thai. Product and feature names stay as the company writes them
-  (Ket-CMS, LINE OA, ClickUp, Order, Blog). Keep an English word only when Thai has no
-  everyday equivalent. No commit hashes anywhere in note_html.
+- LANGUAGE: Thai sentences, but every technical term and every loanword stays in
+  English, spelled the way engineers write it — never transliterate it into Thai
+  script. Write deploy, server, API, login, cache, build, release, bug, token,
+  webhook, database, backup, domain, SSL, migration, dashboard, report, coupon,
+  order, payment — not ดีพลอย / เซิร์ฟเวอร์ / ล็อกอิน / แคช / บิลด์ / รีลีส / บั๊ก /
+  โทเคน / ดาต้าเบส / แบ็กอัป / โดเมน / ไมเกรชัน / แดชบอร์ด / รีพอร์ต / คูปอง / ออเดอร์.
+  Plain Thai words that are not loanwords stay Thai (ลูกค้า, สินค้า, ร้าน, แก้ไข, เพิ่ม).
+  Product and feature names stay as the company writes them (Ket-CMS, LINE OA,
+  ClickUp, Order, Blog). The reader rule above still applies: an English term is
+  fine, a file / function / column name is not. No commit hashes anywhere in note_html.
 - evidence.commits: hashes (≥7 chars) of the commits this card covers.
   evidence.tasks: ClickUp custom ids / task ids this card covers. Use only ids that
   appear in the evidence below — never invent ids.
