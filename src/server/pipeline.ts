@@ -8,14 +8,16 @@ import { filterMyCommits } from "./authors";
 import { resolveDayTargets, type ResolvedDayTarget } from "./day-targets";
 import { getDefaultDailySec, getSetting } from "./settings";
 import { refreshEvidence } from "./sync";
-import { getTaskTypes, searchTasks, type RemoteTask } from "./sources/workload";
+import { fetchRemoteRange } from "./remote-sync";
+import type { RemoteTaskLike } from "./engine/reconcile";
+import { syncAllowedTaskTypes, workloadAccount } from "./workload-account";
 import { resolveClickupLink } from "./engine/clickup-link";
 import { buildDayEvidence, hasDayEvidence, type DayEvidence } from "./engine/evidence";
 import { buildDayPrompt } from "./engine/prompt";
 import { parseDayPlan, validateDayPlan, type DayPlan } from "./engine/validator";
 import { allocate, MAX_CARD_SEC, STEP_SEC } from "./engine/allocator";
 import type { AiProvider } from "./ai/provider";
-import { isTransientAiError } from "./ai/cli";
+import { DEFAULT_AI_MODEL, isTransientAiError } from "./ai/cli";
 import { sumUsage, type AiUsage } from "./ai/usage";
 import { appendLog, type RunLogger } from "./run-log";
 
@@ -101,7 +103,7 @@ export async function executeRun(
     const { remoteTasks, remoteWarning } = await fetchRemoteTasks(fromYMD, toYMD);
     if (remoteWarning) log("warn", remoteWarning);
     else log("info", `เช็คของที่อยู่บน workload แล้ว ${remoteTasks.length} รายการ`);
-    const taskTypeNames = await ensureTaskTypes();
+    const taskTypeNames = await ensureTaskTypes(log);
     log("info", `ประเภทงานที่เลือกได้ ${taskTypeNames.length} แบบ`);
 
     for (const date of regenerate) {
@@ -122,7 +124,7 @@ export async function executeRun(
     log(
       "info",
       `หลักฐานในช่วงนี้: ${shared.commits.length} commit ของเรา · ${shared.tasks.length} task ใน ClickUp` +
-        (shared.aiModel ? ` · โมเดล ${shared.aiModel}` : " · โมเดลค่าเริ่มต้นของ CLI"),
+        ` · โมเดล ${shared.aiModel}`,
     );
     const queue = [...workDays];
     const failures: string[] = [...sync.warnings];
@@ -192,6 +194,9 @@ export async function executeRun(
       error: error instanceof Error ? error.message : String(error),
       finishedAt: new Date(),
     });
+  } finally {
+    // Long-lived CLI sessions belong to this run; don't leave them running.
+    provider.close?.();
   }
 }
 
@@ -204,7 +209,7 @@ type SharedContext = {
   events: (typeof schema.clickupEvents.$inferSelect)[];
   styleExamples: (typeof schema.styleExamples.$inferSelect)[];
   rulesMd: string | null;
-  aiModel: string | null;
+  aiModel: string;
 };
 
 async function loadSharedContext(fromYMD: string, toYMD: string): Promise<SharedContext> {
@@ -232,43 +237,35 @@ async function loadSharedContext(fromYMD: string, toYMD: string): Promise<Shared
       .all(),
     styleExamples: db.select().from(schema.styleExamples).all().slice(-20).reverse(),
     rulesMd: getSetting("rules_md"),
-    aiModel: getSetting("ai_model"),
+    aiModel: getSetting("ai_model")?.trim() || DEFAULT_AI_MODEL,
   };
 }
 
 async function fetchRemoteTasks(
   fromYMD: string,
   toYMD: string,
-): Promise<{ remoteTasks: RemoteTask[]; remoteWarning: string | null }> {
-  const jwt = getSetting("jwt");
-  const email = getSetting("email");
-  if (!jwt || !email) {
-    return { remoteTasks: [], remoteWarning: "ไม่มี JWT/email — ข้ามการเช็คงานที่ส่งไปแล้ว" };
+): Promise<{ remoteTasks: RemoteTaskLike[]; remoteWarning: string | null }> {
+  const account = workloadAccount();
+  if ("missing" in account) {
+    return { remoteTasks: [], remoteWarning: `ไม่มี ${account.missing} — ข้ามการเช็คงานที่ส่งไปแล้ว` };
   }
-  const res = await searchTasks({ jwt, email, startDate: fromYMD, endDate: toYMD });
-  if (res.authExpired) return { remoteTasks: [], remoteWarning: "JWT หมดอายุ — เช็คซ้ำไม่ได้" };
-  if (!res.ok) return { remoteTasks: [], remoteWarning: `workload API ตอบ ${res.status}` };
-  return { remoteTasks: res.data, remoteWarning: null };
+  const res = await fetchRemoteRange(account.jwt, account.identity.userId, fromYMD, toYMD);
+  if (!res.ok) {
+    return {
+      remoteTasks: [],
+      remoteWarning: res.authExpired ? "JWT หมดอายุ — เช็คซ้ำไม่ได้" : `workload API: ${res.error}`,
+    };
+  }
+  return { remoteTasks: res.tasks, remoteWarning: null };
 }
 
-async function ensureTaskTypes(): Promise<string[]> {
-  const db = getDb();
-  const jwt = getSetting("jwt");
-  if (jwt) {
-    const res = await getTaskTypes(jwt);
-    if (res.ok) {
-      for (const t of res.data) {
-        db.insert(schema.taskTypes)
-          .values({ id: t.id, name: t.tasks_propose, color: t.color, syncedAt: new Date() })
-          .onConflictDoUpdate({
-            target: schema.taskTypes.id,
-            set: { name: t.tasks_propose, color: t.color, syncedAt: new Date() },
-          })
-          .run();
-      }
-    }
+async function ensureTaskTypes(log: RunLogger): Promise<string[]> {
+  const account = workloadAccount();
+  if (!("missing" in account)) {
+    const res = await syncAllowedTaskTypes(account.jwt);
+    if (!res.ok) log("warn", `ดึงประเภทงานจาก workload ไม่ได้ (${res.error}) — ใช้รายการเดิม`);
   }
-  const names = db
+  const names = getDb()
     .select()
     .from(schema.taskTypes)
     .all()
@@ -282,7 +279,7 @@ async function ensureTaskTypes(): Promise<string[]> {
 async function generateDay(input: {
   runId: number;
   day: ResolvedDayTarget;
-  remoteTasks: RemoteTask[];
+  remoteTasks: RemoteTaskLike[];
   taskTypeNames: string[];
   shared: SharedContext;
   provider: AiProvider;
@@ -305,8 +302,8 @@ async function generateDay(input: {
   }
 
   const remoteSec = input.remoteTasks
-    .filter((t) => t.tasks_date.slice(0, 10) === day.date)
-    .reduce((s, t) => s + (Number(t.duration) || 0), 0);
+    .filter((t) => t.workDate === day.date)
+    .reduce((s, t) => s + t.durationSec, 0);
   const submittedSec = existing
     .filter((c) => c.status === "submitted")
     .reduce((s, c) => s + c.durationSec, 0);
@@ -451,6 +448,8 @@ async function generateValidPlan(
   let transientRetries = 0;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS + MAX_TRANSIENT_RETRIES; attempt++) {
+    // The system part is identical for every day of the run, so the CLI
+    // session reads it from the prompt cache; only `user` is new each day.
     const prompt = buildDayPrompt({
       evidence,
       taskTypeNames: input.taskTypeNames,
@@ -464,9 +463,12 @@ async function generateValidPlan(
     let usage: AiUsage | null = null;
     let callError: string | null = null;
     let isTransient = false;
-    log("info", `${input.day.date}: เรียก AI ครั้งที่ ${attempt} (prompt ${fmtTokens(prompt.length)} ตัวอักษร)`);
+    log("info", `${input.day.date}: เรียก AI ครั้งที่ ${attempt} (prompt ${fmtTokens(prompt.user.length)} ตัวอักษร)`);
     try {
-      const result = await input.provider.generate(prompt, { model: input.shared.aiModel });
+      const result = await input.provider.generate(prompt.user, {
+        model: input.shared.aiModel,
+        system: prompt.system,
+      });
       raw = result.text;
       durationMs = result.durationMs;
       usage = result.usage ?? null;
@@ -474,7 +476,7 @@ async function generateValidPlan(
         input.usages.push(usage);
         log(
           "info",
-          `${input.day.date}: ${usage.model ?? "โมเดลค่าเริ่มต้น"} · ` +
+          `${input.day.date}: ${usage.model ?? input.shared.aiModel} · ` +
             `เข้า ${fmtTokens(usage.inputTokens)} ออก ${fmtTokens(usage.outputTokens)} ` +
             `แคช ${fmtTokens(usage.cacheReadTokens + usage.cacheCreationTokens)} · ` +
             `${(durationMs / 1000).toFixed(1)} วิ` +
@@ -503,10 +505,10 @@ async function generateValidPlan(
         runId: input.runId,
         date: input.day.date,
         attempt,
-        prompt,
+        prompt: `${prompt.system}\n\n----- day message -----\n\n${prompt.user}`,
         rawOutput: raw || null,
         durationMs,
-        model: usage?.model ?? input.shared.aiModel ?? null,
+        model: usage?.model ?? input.shared.aiModel,
         inputTokens: usage?.inputTokens ?? null,
         outputTokens: usage?.outputTokens ?? null,
         cacheReadTokens: usage?.cacheReadTokens ?? null,

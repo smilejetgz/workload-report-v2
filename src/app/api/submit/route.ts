@@ -23,7 +23,7 @@ export function POST(request: Request) {
   });
 }
 
-/** GET ?from&to → payload for manual copy-paste submission. */
+/** GET ?from&to → POST /tasks/batch bodies (one per day) for manual copy-paste submission. */
 export function GET(request: Request) {
   return handle(() => {
     const url = new URL(request.url);
@@ -32,7 +32,6 @@ export function GET(request: Request) {
     if (!isValidYMD(from) || !isValidYMD(to)) return fail("from/to ไม่ถูกต้อง");
     const cards = selectSubmittableCards(from, to);
     const payload = buildPayload(cards);
-    if ("missing" in payload) return fail(`ยังไม่ได้ตั้งค่า ${payload.missing}`);
     return ok({ payload, count: cards.length });
   });
 }

@@ -2,6 +2,8 @@
 
 import type {
   Card,
+  ChatAttachment,
+  ChatMessage,
   Project,
   Run,
   TaskType,
@@ -40,6 +42,8 @@ export type SettingsData = {
   settings: Record<string, string | null>;
   gitAuthors: string[];
   identity: IdentityCheck;
+  /** Owner of the JWT, read from the token itself. */
+  account: { name: string; email: string; role: string } | null;
   jwtExpiresAt: string | null;
   jwtExpired: boolean | null;
 };
@@ -51,10 +55,12 @@ export type GitAuthorsData = {
   warnings: string[];
 };
 
-export type EmployeesData = {
-  employees: { id: number; name: string; email: string; role?: string }[];
+export type WorkloadMe = {
+  me: { id: number; name: string; email: string; role: string; positions: { positionId: number; name: string }[] };
   identity: IdentityCheck;
 };
+
+export type ChatThreadData = { threadId: number | null; messages: ChatMessage[] };
 
 export type CardsData = { cards: Card[]; days: ResolvedDayTarget[]; coverage: CoverageReport };
 
@@ -87,7 +93,7 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ values: { git_authors: JSON.stringify(authors) } }),
     }),
-  employees: () => call<EmployeesData>("/api/employees"),
+  me: () => call<WorkloadMe>("/api/me"),
 
   taskTypes: () => call<{ taskTypes: TaskType[] }>("/api/task-types"),
   syncTaskTypes: () => call<{ synced: number }>("/api/task-types", { method: "POST" }),
@@ -130,6 +136,21 @@ export const api = {
       remoteCount: number;
     }>("/api/reconcile", { method: "POST", body: JSON.stringify({ from, to }) }),
 
+  chatThread: (scope: string) =>
+    call<ChatThreadData>(`/api/chat?scope=${encodeURIComponent(scope)}`),
+  /** Waits for the AI — can take a minute. */
+  sendChat: (input: {
+    scope: string;
+    text: string;
+    attachments?: ChatAttachment[];
+    newThread?: boolean;
+  }) => call<ChatThreadData>("/api/chat", { method: "POST", body: JSON.stringify(input) }),
+  proposalAction: (messageId: number, action: "apply" | "discard") =>
+    call<{ applied: number; failed: string[] }>(`/api/chat/proposals/${messageId}`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
+
   generate: (input: {
     from: string;
     to: string;
@@ -153,7 +174,9 @@ export const api = {
       body: JSON.stringify({ from, to, ids }),
     }),
   submitPayload: (from: string, to: string) =>
-    call<{ payload: { tasks: unknown[] }; count: number }>(`/api/submit?from=${from}&to=${to}`),
+    call<{ payload: { days: unknown[]; skipped: string[] }; count: number }>(
+      `/api/submit?from=${from}&to=${to}`,
+    ),
 
   /** One day (date) or a span (from+to) — leave is usually several days. */
   setDayTarget: (input: {

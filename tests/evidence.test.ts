@@ -142,13 +142,28 @@ describe("formatEvidenceText", () => {
 });
 
 describe("buildDayPrompt", () => {
-  const promptFor = (over: Partial<Parameters<typeof buildDayEvidence>[0]> = {}) =>
+  // The model sees both parts; most rules only care that the text is there.
+  const promptParts = (over: Partial<Parameters<typeof buildDayEvidence>[0]> = {}) =>
     buildDayPrompt({
       evidence: build(over),
       taskTypeNames: ["Ket-CMS"],
       rulesMd: null,
       styleExamples: [],
     });
+  const promptFor = (over: Partial<Parameters<typeof buildDayEvidence>[0]> = {}) => {
+    const { system, user } = promptParts(over);
+    return `${system}\n${user}`;
+  };
+
+  // Prompt caching only pays if the system part is byte-identical every day.
+  test("the system prompt does not depend on the day", () => {
+    const a = promptParts({ commits: [commit()] });
+    const b = promptParts({ date: "2026-08-20", targetSec: 4 * 3600 });
+    expect(a.system).toBe(b.system);
+    expect(a.system).not.toContain(DATE);
+    expect(a.user).toContain(DATE);
+    expect(a.user).toContain("a1b2c3d4");
+  });
 
   test("states that commits are the ground truth, before ClickUp", () => {
     const prompt = promptFor({ commits: [commit()] });
@@ -176,7 +191,7 @@ describe("buildDayPrompt", () => {
   });
 
   test("tells the model the examples are for shape, not for wording", () => {
-    const prompt = buildDayPrompt({
+    const { system: prompt } = buildDayPrompt({
       evidence: build({ commits: [commit()] }),
       taskTypeNames: ["Ket-CMS"],
       rulesMd: null,
@@ -239,14 +254,14 @@ describe("hasDayEvidence — what counts as proof that work happened", () => {
       remoteTasks: [
         {
           id: 1,
-          tasks_date: DATE,
-          duration: 3600,
-          note: "<p>x</p>",
+          legacyId: null,
+          workDate: DATE,
+          durationSec: 3600,
+          title: "x",
+          noteHtml: "<p>x</p>",
+          taskType: "Ket-CMS",
           website: null,
-          task_by: "me",
-          task_type: "Ket-CMS",
-          email: null,
-          clickup_task: null,
+          clickupTask: null,
         },
       ],
     });

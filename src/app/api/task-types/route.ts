@@ -1,7 +1,6 @@
 import { getDb, schema } from "@/db/client";
 import { fail, handle, ok } from "@/server/http";
-import { getSetting } from "@/server/settings";
-import { getTaskTypes } from "@/server/sources/workload";
+import { syncAllowedTaskTypes, workloadAccount } from "@/server/workload-account";
 
 export function GET() {
   return handle(() => {
@@ -10,24 +9,17 @@ export function GET() {
   });
 }
 
-/** POST = sync from workload API. */
+/** POST = sync from workload API (only the types this user's positions may log). */
 export function POST() {
   return handle(async () => {
-    const jwt = getSetting("jwt");
-    if (!jwt) return fail("ยังไม่มี JWT — ใส่ในหน้า Settings ก่อน");
-    const res = await getTaskTypes(jwt);
-    if (res.authExpired) return fail("JWT หมดอายุ — วางใหม่ในหน้า Settings", 401);
-    if (!res.ok) return fail(`workload API ตอบ ${res.status}`);
-    const db = getDb();
-    for (const t of res.data) {
-      db.insert(schema.taskTypes)
-        .values({ id: t.id, name: t.tasks_propose, color: t.color, syncedAt: new Date() })
-        .onConflictDoUpdate({
-          target: schema.taskTypes.id,
-          set: { name: t.tasks_propose, color: t.color, syncedAt: new Date() },
-        })
-        .run();
+    const account = workloadAccount();
+    if ("missing" in account) return fail(`ยังไม่ได้ตั้งค่า ${account.missing} — ใส่ในหน้า Settings ก่อน`);
+    const res = await syncAllowedTaskTypes(account.jwt);
+    if (!res.ok) {
+      return res.authExpired
+        ? fail("JWT หมดอายุ — วางใหม่ในหน้า Settings", 401)
+        : fail(`workload API: ${res.error}`, 502);
     }
-    return ok({ synced: res.data.length });
+    return ok({ synced: res.count });
   });
 }

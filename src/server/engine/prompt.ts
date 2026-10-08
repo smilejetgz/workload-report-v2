@@ -1,28 +1,38 @@
 // Day-plan prompt builder. Pure function — snapshot-tested.
+//
+// Split for prompt caching: `system` holds everything that is the same for
+// every day of a run (instructions, task types, style examples, user rules),
+// so it is sent once and read back from the cache; `user` holds only what
+// changes per day. Nothing date- or day-specific may go into `system` — one
+// differing byte there and every day pays full price for it again.
 
 import type { StyleExample } from "@/db/schema";
 import { formatEvidenceText, stripHtml, type DayEvidence } from "./evidence";
 
 const THAI_DAYS = ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"];
 
-export type PromptInput = {
-  evidence: DayEvidence;
+export type SystemPromptInput = {
   taskTypeNames: string[];
   rulesMd: string | null;
   styleExamples: StyleExample[];
+};
+
+export type PromptInput = SystemPromptInput & {
+  evidence: DayEvidence;
   repairNote?: string | null;
 };
 
-export function buildDayPrompt(input: PromptInput): string {
-  const { evidence } = input;
-  const targetHours = evidence.targetSec / 3600;
-  const dow = THAI_DAYS[new Date(`${evidence.date}T00:00:00Z`).getUTCDay()];
-  const hasCommits = evidence.commits.length > 0;
-  const coverageLine = hasCommits
-    ? `Commit hashes that MUST all be covered by some card's evidence.commits: ` +
-      evidence.commits.map((c) => c.hash.slice(0, 8)).join(", ")
-    : "No commits today — no commit coverage required.";
+export type DayPrompt = { system: string; user: string };
 
+export function buildDayPrompt(input: PromptInput): DayPrompt {
+  return {
+    system: buildSystemPrompt(input),
+    user: buildDayMessage(input.evidence, input.repairNote ?? null),
+  };
+}
+
+/** Instructions shared by every day of a run — must not depend on the day. */
+export function buildSystemPrompt(input: SystemPromptInput): string {
   const styleBlock =
     input.styleExamples.length > 0
       ? input.styleExamples
@@ -34,27 +44,22 @@ export function buildDayPrompt(input: PromptInput): string {
           .join("\n\n")
       : "(no examples yet — use the format shown in the schema example)";
 
-  const alreadyReported =
-    evidence.existingRemote.length > 0
-      ? evidence.existingRemote
-          .map((r) => `- [${r.taskType}] ${r.durationSec / 3600}h: ${r.notePlain}`)
-          .join("\n")
-      : "(none)";
-
-  return `You are generating one day of a workload report for a software engineer.
-Analyse the evidence below and produce work cards that credibly describe what was done.
+  return `You are generating a workload report for a software engineer, one day at a time.
+Each user message is one day: analyse its evidence and produce work cards that
+credibly describe what was done that day. Every day is independent — never carry
+a card, a commit or an hour from an earlier message into another day.
 Return ONLY a JSON object — no markdown fences, no commentary before or after.
 
 ## Output JSON schema (follow exactly)
 {
-  "date": "${evidence.date}",
+  "date": "YYYY-MM-DD — the date of the day in the user message",
   "cards": [
     {
-      "topic": "short plain-Thai headline a non-technical reader understands",
+      "topic": "short Thai headline a non-technical reader understands (technical terms stay in English)",
       "task_type": "one of the allowed task types",
       "website": null,
       "clickup_task": "custom id like DEV-6395 if the card is tied to one task, else null",
-      "note_html": "<p><b>[DEV-6395] ส่งโปรโมชันอัตโนมัติเมื่อมีออเดอร์</b></p><ul><li>ลูกค้าได้รับคูปองทันทีหลังสั่งซื้อ ไม่ต้องส่งเอง</li><li>รองรับการตั้งเงื่อนไขว่าออเดอร์แบบไหนถึงได้รับ</li></ul>",
+      "note_html": "<p><b>[DEV-6395] ส่ง coupon อัตโนมัติเมื่อมี order ใหม่</b></p><ul><li>ลูกค้าได้รับ coupon ทันทีหลังสั่งซื้อ ไม่ต้องส่งเอง</li><li>ตั้งเงื่อนไขได้ว่า order แบบไหนถึงได้รับ</li></ul>",
       "hours": 2.5,
       "time_of_day": "morning",
       "origin": "git",
@@ -62,14 +67,15 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
       "confidence": 0.9
     }
   ],
-  "reviewer_notes": "optional: anything the reviewer should know (Thai)"
+  "reviewer_notes": "optional: anything the reviewer should know (Thai, technical terms in English)"
 }
 
 ## Evidence priority (read this before anything else)
 1. Git commits are the ground truth: they are the work that actually happened.
    Start from the commits, group them into work topics, and write those cards FIRST.
-2. ${coverageLine}
-   One card may cover many commits — group related ones instead of dropping any.
+2. Every commit hash the day message lists under "Commit coverage" MUST be covered
+   by some card's evidence.commits. One card may cover many commits — group related
+   ones instead of dropping any.
 3. ClickUp is SUPPLEMENTARY. Use it to name the ticket, borrow the task's wording,
    and understand what the commits were for. A ClickUp task on its own is NOT
    evidence that work happened that day.
@@ -80,8 +86,8 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
    Order the cards: commit-backed first, ClickUp-only next, inferred filler last.
 
 ## Hard rules
-- "date" MUST be "${evidence.date}" (${dow}).
-- Produce 2-5 cards. Total hours MUST sum to exactly ${targetHours} hours.
+- "date" MUST be the date given in the day message.
+- Produce 2-5 cards. Total hours MUST sum to exactly the day's target hours.
 - hours: multiples of 0.25, each card between 0.5 and 4 hours.
 - task_type MUST be exactly one of: ${input.taskTypeNames.join(", ")}.
 - Group by WORK TOPIC / activity, never by repository name.
@@ -93,23 +99,30 @@ Return ONLY a JSON object — no markdown fences, no commentary before or after.
   stopped happening. Never name a file, a function, a database column, a branch, a flag
   or an internal status code; those say nothing to the reader. Translate them into the
   situation they affect.
-    good: <li>ลูกค้าแก้ที่อยู่จัดส่งเองได้ในขั้นตอนที่รอจัดส่ง</li>
+    good: <li>ลูกค้าแก้ shipping address เองได้ระหว่างรอจัดส่ง</li>
     bad:  <li>ปรับเงื่อนไขใน edit_order_shipping_address ของ orders service</li>
-    good: <li>หน้ารายการสินค้าโหลดเร็วขึ้นเมื่อร้านมีสินค้าจำนวนมาก</li>
+    good: <li>หน้า product list โหลดเร็วขึ้นเมื่อร้านมีสินค้าจำนวนมาก</li>
     bad:  <li>ตัด query ที่โตตามปริมาณข้อมูลใน evaluate_order</li>
-- LANGUAGE: plain Thai. Product and feature names stay as the company writes them
-  (Ket-CMS, LINE OA, ClickUp, Order, Blog). Keep an English word only when Thai has no
-  everyday equivalent. No commit hashes anywhere in note_html.
+- LANGUAGE: Thai sentences, but every technical term and every loanword stays in
+  English, spelled the way engineers write it — never transliterate it into Thai
+  script. Write deploy, server, API, login, cache, build, release, bug, token,
+  webhook, database, backup, domain, SSL, migration, dashboard, report, coupon,
+  order, payment — not ดีพลอย / เซิร์ฟเวอร์ / ล็อกอิน / แคช / บิลด์ / รีลีส / บั๊ก /
+  โทเคน / ดาต้าเบส / แบ็กอัป / โดเมน / ไมเกรชัน / แดชบอร์ด / รีพอร์ต / คูปอง / ออเดอร์.
+  Plain Thai words that are not loanwords stay Thai (ลูกค้า, สินค้า, ร้าน, แก้ไข, เพิ่ม).
+  Product and feature names stay as the company writes them (Ket-CMS, LINE OA,
+  ClickUp, Order, Blog). The reader rule above still applies: an English term is
+  fine, a file / function / column name is not. No commit hashes anywhere in note_html.
 - evidence.commits: hashes (≥7 chars) of the commits this card covers.
   evidence.tasks: ClickUp custom ids / task ids this card covers. Use only ids that
-  appear in the evidence below — never invent ids.
+  appear in that day's evidence — never invent ids.
 - clickup_task: leave it null. The app attaches the ClickUp task and its url
   itself, from the ticket ids carried by the commits you cite — a card with no
   such commit gets no ClickUp reference, and that is intended.
 - origin: "git" whenever the card cites at least one commit (this should be most cards),
   "clickup" only when it cites no commit but real task/comment activity that day,
   "inferred" when you are filling time without direct evidence.
-- Do NOT duplicate anything listed under "Already reported".
+- Do NOT duplicate anything the day message lists under "Already reported".
 - Filling time: only AFTER every commit and every real activity above is covered,
   and only to top up the remaining hours — never as the substance of the day.
   Use work that plausibly surrounds the evidence (review, testing, debugging of
@@ -122,12 +135,35 @@ Use these for structure and length (a bold headline, then a few short bullets).
 Do NOT copy their wording: older reports name functions and services, which is
 exactly what this report must avoid.
 ${styleBlock}
+${input.rulesMd ? `\n## Additional user rules (override style, not the JSON contract)\n${stripHtml(input.rulesMd).slice(0, 2000)}\n` : ""}`;
+}
 
-${input.rulesMd ? `## Additional user rules (override style, not the JSON contract)\n${stripHtml(input.rulesMd).slice(0, 2000)}\n` : ""}
-## Evidence for ${evidence.date} (target: ${targetHours} hours)
+/** What changes per day: the date, the target, the evidence. */
+export function buildDayMessage(evidence: DayEvidence, repairNote: string | null): string {
+  const targetHours = evidence.targetSec / 3600;
+  const dow = THAI_DAYS[new Date(`${evidence.date}T00:00:00Z`).getUTCDay()];
+  const coverageLine =
+    evidence.commits.length > 0
+      ? `Commit hashes that MUST all be covered by some card's evidence.commits: ` +
+        evidence.commits.map((c) => c.hash.slice(0, 8)).join(", ")
+      : "No commits today — no commit coverage required.";
+
+  const alreadyReported =
+    evidence.existingRemote.length > 0
+      ? evidence.existingRemote
+          .map((r) => `- [${r.taskType}] ${r.durationSec / 3600}h: ${r.notePlain}`)
+          .join("\n")
+      : "(none)";
+
+  return `# Day ${evidence.date} (${dow}) — target: exactly ${targetHours} hours
+
+## Commit coverage
+${coverageLine}
+
+## Evidence for ${evidence.date}
 ${formatEvidenceText(evidence)}
 
 ## Already reported on ${evidence.date} (do not duplicate)
 ${alreadyReported}
-${input.repairNote ? `\n## Fix these problems from your previous attempt\n${input.repairNote}\n` : ""}`;
+${repairNote ? `\n## Fix these problems from your previous attempt\n${repairNote}\n` : ""}`;
 }

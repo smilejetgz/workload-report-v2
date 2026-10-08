@@ -11,6 +11,9 @@ AI (claude CLI) วิเคราะห์ git commits + ClickUp activity แ�
 - **Drizzle + better-sqlite3** (`data/app.db`) — ⚠️ Node เท่านั้น: ห้ามรันโค้ด DB ด้วย Bun runtime
   (better-sqlite3 crash ใต้ bun 1.2.x) — bun ใช้เป็น package manager, script รันผ่าน `tsx`
 - **claude CLI** (`claude -p`) เป็น AI provider — ต้องมี `claude` บน PATH
+  โมเดลค่าเริ่มต้น `claude-sonnet-5-5[1m]` (เปลี่ยนได้ในหน้า Settings) · เปิด CLI ค้างไว้ต่อ worker
+  แล้วป้อนทีละวันผ่าน stream-json — คำสั่งคงที่อยู่ใน system prompt (`--append-system-prompt`)
+  จึงถูกอ่านจาก prompt cache ทุกวันถัดไป; session ถูกปลดหลัง 8 วันเพื่อไม่ให้ history โต
 - `.mcp.json` มี `next-devtools-mcp` สำหรับ debug ผ่าน Claude Code
 
 ## เริ่มใช้
@@ -23,8 +26,13 @@ bun run dev           # เปิด http://localhost:3000
 
 หน้า **Settings**:
 
-1. **JWT** (จำเป็นตอน Submit) — copy จาก `Authorization: Bearer …` ใน DevTools ของ workload site
-   (หมดอายุแล้ววางใหม่ได้เลย แอปเตือนเอง; ระหว่างไม่มี JWT ใช้ปุ่ม **copy payload** ส่งเองได้)
+1. **JWT** (จำเป็นตอน Submit) — ส่งขึ้น **workload v2** (`https://workloads.ketspace.io/api`,
+   เปลี่ยนได้ด้วย `WORKLOAD_API_BASE`) เปิด workloads.ketspace.io แล้ว copy ค่า
+   `localStorage["workload.access_token"]` ใน DevTools (หรือตั้ง `WORKLOAD_JWT` ใน `.env`)
+   โทเคนอายุ 8 ชม. — หมดแล้ววางใหม่ได้เลย แอปเตือนเอง; ระหว่างไม่มี JWT ใช้ปุ่ม **copy payload**
+   (body ของ `POST /tasks/batch` วันละก้อน) ส่งเองได้
+   รายงานถูกบันทึกในนาม **เจ้าของโทเคน** เสมอ — ไม่ต้องตั้งชื่อ/อีเมลเอง
+   และประเภทงานที่ AI เลือกได้ถูกกรองตามตำแหน่งของเจ้าของโทเคน
 2. **ClickUp** — ไม่ต้องตั้งค่า ใช้ MCP connector ที่ล็อกอินใน Claude อยู่แล้วโดยอัตโนมัติ
    (ใส่ personal token `pk_…` ได้ถ้าอยากให้ sync เร็วขึ้นผ่าน REST)
 3. **Projects** — import จาก v1 ให้แล้ว; เพิ่มใหม่กดจากรายการ repo ที่สแกนเจอในเครื่อง
@@ -37,7 +45,8 @@ bun run dev           # เปิด http://localhost:3000
   → refresh evidence: git scan (incremental) + ClickUp sync + match ticket id
   → AI ต่อวัน (ขนาน ≤3, validate + repair ≤3 รอบ)
   → allocator (โค้ด ไม่ใช่ AI) บังคับชั่วโมงรวม = เป้าเป๊ะ; ขาด → เติม card "inferred"
-  → รีวิว/แก้/gen ใหม่รายวัน → Submit ทั้งหมด (upsert กันซ้ำด้วย fingerprint + remote id)
+  → รีวิว/แก้/gen ใหม่รายวัน → Submit ทั้งหมด (POST /tasks/batch วันละก้อน all-or-nothing;
+    card ที่มี remote id = แก้แถวเดิม ไม่สร้างซ้ำ)
 ```
 
 - **Coverage panel** ท้ายหน้า: commit ที่ไม่ถูกอ้าง, task ปิดแล้วไม่มี card, วันหยุดที่มี commit
@@ -63,3 +72,9 @@ bun run db:generate   # หลังแก้ src/db/schema.ts
 โครงสร้าง: `src/server/engine/*` (pure: allocator/validator/matcher/coverage/prompt/evidence),
 `src/server/sources/*` (git/clickup/workload API), `src/server/pipeline.ts` (generate),
 `src/app/api/*` (route handlers), `PLAN.md` (design + decisions)
+
+## ย้ายจาก workload v1
+
+card ที่เคยส่งขึ้น workload เก่าเก็บ remote id เป็น `v1:<id>` (migration `0003`) และจะไม่ถูกส่งเป็น
+task id ของ v2 เด็ดขาด — ตอนเปิดช่วงวัน แอปดึงแถวจริงจาก v2 แล้วจับคู่ผ่าน `legacyId`
+ที่ data migration ของ v2 เก็บไว้ให้เอง (card ที่ยังไม่จับคู่ แก้/ลบ/ส่งซ้ำไม่ได้จนกว่าจะกด **ดึงจาก workload**)

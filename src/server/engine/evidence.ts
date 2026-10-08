@@ -7,7 +7,7 @@
 // ticket ids found in that day's commits, not on their own merit.
 
 import type { ClickupEvent, ClickupTask, Commit } from "@/db/schema";
-import type { RemoteTask } from "@/server/sources/workload";
+import type { RemoteTaskLike } from "@/server/engine/reconcile";
 import { htmlToText } from "@/lib/html-text";
 import { BANGKOK_OFFSET_MS, timeOfDay, toBangkokYMD } from "@/server/time";
 
@@ -74,7 +74,7 @@ export function buildDayEvidence(input: {
   projectNames: Map<number, string>;
   tasks: ClickupTask[];
   events: ClickupEvent[];
-  remoteTasks: RemoteTask[];
+  remoteTasks: RemoteTaskLike[];
 }): DayEvidence {
   const { date } = input;
   const taskById = new Map(input.tasks.map((t) => [t.taskId, t]));
@@ -154,11 +154,11 @@ export function buildDayEvidence(input: {
     });
 
   const existingRemote = input.remoteTasks
-    .filter((t) => t.tasks_date.slice(0, 10) === date)
+    .filter((t) => t.workDate === date)
     .map((t) => ({
-      taskType: t.task_type,
-      durationSec: Number(t.duration) || 0,
-      notePlain: stripHtml(t.note).slice(0, 200),
+      taskType: t.taskType,
+      durationSec: t.durationSec,
+      notePlain: [t.title.trim(), stripHtml(t.noteHtml)].filter(Boolean).join(" — ").slice(0, 200),
     }));
 
   return { date, targetSec: input.targetSec, commits, tasksClosed, tasksActive, comments, existingRemote };

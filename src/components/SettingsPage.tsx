@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
+import { DEFAULT_AI_MODEL } from "@/lib/ai-defaults";
 import { api } from "@/lib/api";
 import { IdentitySection } from "./IdentitySection";
 import { ThemeToggle } from "./ThemeToggle";
@@ -134,7 +135,7 @@ export function SettingsPage() {
             hint={
               settingsQuery.data?.jwtExpiresAt
                 ? `หมดอายุ ${new Date(settingsQuery.data.jwtExpiresAt).toLocaleString("th-TH")}${settingsQuery.data.jwtExpired ? " — หมดแล้ว วางใหม่" : ""}`
-                : "เปิด workload.ketspace.io แล้วคัดลอกค่าจาก localStorage.token → access_token"
+                : "เปิด workloads.ketspace.io แล้วคัดลอกค่า localStorage[\"workload.access_token\"] (อายุ 8 ชม.)"
             }
           >
             <textarea
@@ -145,16 +146,15 @@ export function SettingsPage() {
               className="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs focus:border-accent focus:outline-none"
             />
           </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="ชื่อที่แสดง">
-              <Input value={value("task_by")} onChange={(e) => set("task_by", e.target.value)} className="w-full" />
-            </Field>
-            <Field label="อีเมล">
-              <Input value={value("email")} onChange={(e) => set("email", e.target.value)} className="w-full" />
-            </Field>
-          </div>
           <p className="text-[12px] text-muted">
-            ชื่อและอีเมลนี้ถูกส่งไปกับทุกรายการ เลือกจากรายชื่อพนักงานด้านล่างให้ตรงกับ git user ที่เลือกไว้
+            {settingsQuery.data?.account ? (
+              <>
+                ส่งรายงานในนาม <b>{settingsQuery.data.account.name || "?"}</b> ·{" "}
+                {settingsQuery.data.account.email} — ตามเจ้าของโทเคน
+              </>
+            ) : (
+              "รายงานทุกรายการถูกบันทึกในนามเจ้าของโทเคนนี้"
+            )}
           </p>
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => syncTypes.mutate()} disabled={syncTypes.isPending}>
@@ -166,13 +166,7 @@ export function SettingsPage() {
           </div>
         </section>
 
-        <IdentitySection
-          taskBy={value("task_by")}
-          email={value("email")}
-          onPickEmployee={(employee) =>
-            setDraft((d) => ({ ...d, task_by: employee.name, email: employee.email }))
-          }
-        />
+        <IdentitySection />
 
         <section className="space-y-3 rounded-xl border border-border bg-surface p-3.5">
           <Label>ClickUp</Label>
@@ -211,9 +205,9 @@ export function SettingsPage() {
         <section className="space-y-3 rounded-xl border border-border bg-surface p-3.5">
           <Label>การสร้างรายงาน</Label>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="โมเดล" hint="เว้นว่างเพื่อใช้ค่าเริ่มต้น">
+            <Field label="โมเดล" hint={`เว้นว่างเพื่อใช้ค่าเริ่มต้น ${DEFAULT_AI_MODEL}`}>
               <Input
-                placeholder="เช่น sonnet"
+                placeholder={DEFAULT_AI_MODEL}
                 value={value("ai_model")}
                 onChange={(e) => set("ai_model", e.target.value)}
                 className="w-full font-mono"
