@@ -61,7 +61,7 @@ export function CoveragePanel({ coverage }: { coverage: CoverageReport }) {
             </p>
             <ul className="mt-1 space-y-0.5 text-[12px] text-muted">
               {coverage.unreferencedCommits.slice(0, 15).map((c) => (
-                <li key={c.hash} className="flex gap-2">
+                <li key={`${c.project}|${c.hash}`} className="flex gap-2">
                   <span className="shrink-0 font-mono">{c.date.slice(5)}</span>
                   <span className="shrink-0 font-mono opacity-70">{c.project}</span>
                   <span className="truncate">{c.message}</span>

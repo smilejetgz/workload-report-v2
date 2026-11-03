@@ -62,7 +62,15 @@ export function buildCoverage(input: {
     return false;
   };
 
-  const unreferencedCommits = input.commits.filter((c) => !isReferenced(c.hash));
+  // Two checkouts of the same history (a repo and its fork/mirror) list one
+  // commit twice; it is one piece of work, so it is reported once.
+  const seenHashes = new Set<string>();
+  const unreferencedCommits = input.commits.filter((c) => {
+    const hash = c.hash.toLowerCase();
+    if (isReferenced(c.hash) || seenHashes.has(hash)) return false;
+    seenHashes.add(hash);
+    return true;
+  });
 
   const closedTasksWithoutCard = input.closedTasks.filter((t) => {
     const refs = [t.taskId.toLowerCase(), t.customId?.toLowerCase()].filter(Boolean) as string[];

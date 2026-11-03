@@ -8,7 +8,15 @@ import { filterMyCommits } from "./authors";
 import { resolveDayTargets, type ResolvedDayTarget } from "./day-targets";
 import { getDefaultDailySec, getSetting } from "./settings";
 import { refreshEvidence } from "./sync";
-import { getTaskTypes, searchTasks, type RemoteTask } from "./sources/workload";
+import { getMyRange, type RemoteTask } from "./sources/workload";
+import {
+  allowedTaskTypes,
+  fallbackTaskType,
+  listTaskTypes,
+  myPositionIds,
+  syncProjects,
+  syncTaskTypes,
+} from "./workload-ref";
 import { resolveClickupLink } from "./engine/clickup-link";
 import { buildDayEvidence, hasDayEvidence, type DayEvidence } from "./engine/evidence";
 import { buildDayPrompt } from "./engine/prompt";
@@ -101,7 +109,7 @@ export async function executeRun(
     const { remoteTasks, remoteWarning } = await fetchRemoteTasks(fromYMD, toYMD);
     if (remoteWarning) log("warn", remoteWarning);
     else log("info", `เช็คของที่อยู่บน workload แล้ว ${remoteTasks.length} รายการ`);
-    const taskTypeNames = await ensureTaskTypes();
+    const { taskTypeNames, fallbackTaskTypeName } = await ensureTaskTypes();
     log("info", `ประเภทงานที่เลือกได้ ${taskTypeNames.length} แบบ`);
 
     for (const date of regenerate) {
@@ -144,6 +152,7 @@ export async function executeRun(
             day,
             remoteTasks,
             taskTypeNames,
+            fallbackTaskTypeName,
             shared,
             provider,
             log,
@@ -241,42 +250,37 @@ async function fetchRemoteTasks(
   toYMD: string,
 ): Promise<{ remoteTasks: RemoteTask[]; remoteWarning: string | null }> {
   const jwt = getSetting("jwt");
-  const email = getSetting("email");
-  if (!jwt || !email) {
-    return { remoteTasks: [], remoteWarning: "ไม่มี JWT/email — ข้ามการเช็คงานที่ส่งไปแล้ว" };
+  if (!jwt) {
+    return { remoteTasks: [], remoteWarning: "ไม่มีโทเคน workload — ข้ามการเช็คงานที่ส่งไปแล้ว" };
   }
-  const res = await searchTasks({ jwt, email, startDate: fromYMD, endDate: toYMD });
-  if (res.authExpired) return { remoteTasks: [], remoteWarning: "JWT หมดอายุ — เช็คซ้ำไม่ได้" };
+  const res = await getMyRange(jwt, fromYMD, toYMD);
+  if (res.authExpired) {
+    return { remoteTasks: [], remoteWarning: "โทเคน workload หมดอายุ — เช็คของที่ส่งไปแล้วไม่ได้" };
+  }
   if (!res.ok) return { remoteTasks: [], remoteWarning: `workload API ตอบ ${res.status}` };
   return { remoteTasks: res.data, remoteWarning: null };
 }
 
-async function ensureTaskTypes(): Promise<string[]> {
-  const db = getDb();
+/**
+ * Refresh the site's reference tables when a token is present, then return
+ * the type names this user's position may log. The fallback ("Others" on the
+ * site) is what filler cards are booked under.
+ */
+async function ensureTaskTypes(): Promise<{
+  taskTypeNames: string[];
+  fallbackTaskTypeName: string;
+}> {
   const jwt = getSetting("jwt");
   if (jwt) {
-    const res = await getTaskTypes(jwt);
-    if (res.ok) {
-      for (const t of res.data) {
-        db.insert(schema.taskTypes)
-          .values({ id: t.id, name: t.tasks_propose, color: t.color, syncedAt: new Date() })
-          .onConflictDoUpdate({
-            target: schema.taskTypes.id,
-            set: { name: t.tasks_propose, color: t.color, syncedAt: new Date() },
-          })
-          .run();
-      }
-    }
+    // Best effort: a failed refresh falls back to the last synced copy.
+    await Promise.all([syncTaskTypes(jwt), syncProjects(jwt)]);
   }
-  const names = db
-    .select()
-    .from(schema.taskTypes)
-    .all()
-    .map((t) => t.name);
-  if (names.length === 0) {
-    throw new Error("ไม่มี task types — ใส่ workload JWT ใน Settings แล้ว sync ก่อน");
+  const allowed = allowedTaskTypes(listTaskTypes(), myPositionIds());
+  if (allowed.length === 0) {
+    throw new Error("ไม่มี task types — ใส่โทเคน workload ใน Settings แล้วดึงประเภทงานก่อน");
   }
-  return names;
+  const fallback = fallbackTaskType(allowed) ?? allowed[0];
+  return { taskTypeNames: allowed.map((t) => t.name), fallbackTaskTypeName: fallback.name };
 }
 
 async function generateDay(input: {
@@ -284,6 +288,7 @@ async function generateDay(input: {
   day: ResolvedDayTarget;
   remoteTasks: RemoteTask[];
   taskTypeNames: string[];
+  fallbackTaskTypeName: string;
   shared: SharedContext;
   provider: AiProvider;
   log: RunLogger;
@@ -305,8 +310,8 @@ async function generateDay(input: {
   }
 
   const remoteSec = input.remoteTasks
-    .filter((t) => t.tasks_date.slice(0, 10) === day.date)
-    .reduce((s, t) => s + (Number(t.duration) || 0), 0);
+    .filter((t) => t.workDate === day.date)
+    .reduce((s, t) => s + t.durationSec, 0);
   const submittedSec = existing
     .filter((c) => c.status === "submitted")
     .reduce((s, c) => s + c.durationSec, 0);
@@ -410,11 +415,11 @@ async function generateDay(input: {
         topic,
         noteHtml:
           "<p><b>Review / testing</b></p><ul><li>ตรวจสอบและทดสอบงานที่กำลังพัฒนา</li><li>ติดตามงานค้างและแก้ปัญหาย่อย</li></ul>",
-        taskType: input.taskTypeNames[0],
+        taskType: input.fallbackTaskTypeName,
         origin: "inferred",
         confidence: 0.2,
         evidence: { commits: [], tasks: [] },
-        fingerprint: fingerprintCard(day.date, `${topic}-${filler}`, input.taskTypeNames[0]),
+        fingerprint: fingerprintCard(day.date, `${topic}-${filler}`, input.fallbackTaskTypeName),
         internalNote: "เติมอัตโนมัติให้ครบเป้าชั่วโมง",
         createdAt: now,
         updatedAt: now,

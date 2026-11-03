@@ -13,6 +13,8 @@ export const SETTING_KEYS = [
   "rules_md",
   "git_authors", // JSON array of git emails/names that count as "me"
   "clickup_enabled", // "0" to generate from commits alone
+  "workload_user_id", // cached from GET /auth/me when the token is saved
+  "workload_position_ids", // JSON array, cached from GET /auth/me
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];

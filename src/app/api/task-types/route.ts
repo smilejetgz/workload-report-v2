@@ -1,33 +1,22 @@
-import { getDb, schema } from "@/db/client";
 import { fail, handle, ok } from "@/server/http";
 import { getSetting } from "@/server/settings";
-import { getTaskTypes } from "@/server/sources/workload";
+import { listTaskTypes, syncProjects, syncTaskTypes } from "@/server/workload-ref";
 
 export function GET() {
-  return handle(() => {
-    const taskTypes = getDb().select().from(schema.taskTypes).all();
-    return ok({ taskTypes });
-  });
+  return handle(() => ok({ taskTypes: listTaskTypes() }));
 }
 
-/** POST = sync from workload API. */
+/** POST = refresh task types and projects from the workload site. */
 export function POST() {
   return handle(async () => {
     const jwt = getSetting("jwt");
-    if (!jwt) return fail("ยังไม่มี JWT — ใส่ในหน้า Settings ก่อน");
-    const res = await getTaskTypes(jwt);
-    if (res.authExpired) return fail("JWT หมดอายุ — วางใหม่ในหน้า Settings", 401);
-    if (!res.ok) return fail(`workload API ตอบ ${res.status}`);
-    const db = getDb();
-    for (const t of res.data) {
-      db.insert(schema.taskTypes)
-        .values({ id: t.id, name: t.tasks_propose, color: t.color, syncedAt: new Date() })
-        .onConflictDoUpdate({
-          target: schema.taskTypes.id,
-          set: { name: t.tasks_propose, color: t.color, syncedAt: new Date() },
-        })
-        .run();
+    if (!jwt) return fail("ยังไม่มีโทเคน workload — ใส่ในหน้า Settings ก่อน");
+    const [types, projects] = await Promise.all([syncTaskTypes(jwt), syncProjects(jwt)]);
+    if (types.authExpired || projects.authExpired) {
+      return fail("โทเคน workload หมดอายุ — วางใหม่ในหน้า Settings", 401);
     }
-    return ok({ synced: res.data.length });
+    if (!types.ok) return fail(`workload API ตอบ ${types.status}${types.message ? `: ${types.message}` : ""}`);
+    if (!projects.ok) return fail(`workload API ตอบ ${projects.status}${projects.message ? `: ${projects.message}` : ""}`);
+    return ok({ synced: types.data.length, projects: projects.data.length });
   });
 }
