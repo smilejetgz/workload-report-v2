@@ -26,7 +26,7 @@ const DEFAULT_TIMEOUT_MS = 4 * 60 * 1000;
 const MAX_TURNS_PER_SESSION = 8;
 
 /** Flags every invocation shares. */
-const BASE_ARGS = ["-p", "--allow-dangerously-skip-permissions"];
+const BASE_ARGS = ["-p"];
 
 /**
  * The CLI itself failed (spawn / non-zero exit / timeout / error envelope) —

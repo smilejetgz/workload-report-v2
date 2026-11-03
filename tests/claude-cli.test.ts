@@ -83,7 +83,8 @@ describe("ClaudeCliProvider — one long-lived session, cache-friendly", () => {
     const provider = new ClaudeCliProvider();
     try {
       const { argv } = reply((await provider.generate("day 1", { system: "RULES" })).text);
-      expect(argv).toEqual(expect.arrayContaining(["--allow-dangerously-skip-permissions"]));
+      // Sessions run under the normal permission rules — never offer the bypass mode.
+      expect(argv.some((a) => a.includes("dangerously-skip-permissions"))).toBe(false);
       expect(argv[argv.indexOf("--append-system-prompt") + 1]).toBe("RULES");
       expect(argv[argv.indexOf("--model") + 1]).toBe("claude-sonnet-5-5[1m]");
       expect(argv[argv.indexOf("--input-format") + 1]).toBe("stream-json");
