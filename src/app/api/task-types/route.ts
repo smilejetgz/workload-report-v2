@@ -1,22 +1,25 @@
+import { getDb, schema } from "@/db/client";
 import { fail, handle, ok } from "@/server/http";
-import { getSetting } from "@/server/settings";
-import { listTaskTypes, syncProjects, syncTaskTypes } from "@/server/workload-ref";
+import { syncAllowedTaskTypes, workloadAccount } from "@/server/workload-account";
 
 export function GET() {
-  return handle(() => ok({ taskTypes: listTaskTypes() }));
+  return handle(() => {
+    const taskTypes = getDb().select().from(schema.taskTypes).all();
+    return ok({ taskTypes });
+  });
 }
 
-/** POST = refresh task types and projects from the workload site. */
+/** POST = sync from workload API (only the types this user's positions may log). */
 export function POST() {
   return handle(async () => {
-    const jwt = getSetting("jwt");
-    if (!jwt) return fail("ยังไม่มีโทเคน workload — ใส่ในหน้า Settings ก่อน");
-    const [types, projects] = await Promise.all([syncTaskTypes(jwt), syncProjects(jwt)]);
-    if (types.authExpired || projects.authExpired) {
-      return fail("โทเคน workload หมดอายุ — วางใหม่ในหน้า Settings", 401);
+    const account = workloadAccount();
+    if ("missing" in account) return fail(`ยังไม่ได้ตั้งค่า ${account.missing} — ใส่ในหน้า Settings ก่อน`);
+    const res = await syncAllowedTaskTypes(account.jwt);
+    if (!res.ok) {
+      return res.authExpired
+        ? fail("JWT หมดอายุ — วางใหม่ในหน้า Settings", 401)
+        : fail(`workload API: ${res.error}`, 502);
     }
-    if (!types.ok) return fail(`workload API ตอบ ${types.status}${types.message ? `: ${types.message}` : ""}`);
-    if (!projects.ok) return fail(`workload API ตอบ ${projects.status}${projects.message ? `: ${projects.message}` : ""}`);
-    return ok({ synced: types.data.length, projects: projects.data.length });
+    return ok({ synced: res.count });
   });
 }

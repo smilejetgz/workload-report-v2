@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
+import { DEFAULT_AI_MODEL } from "@/lib/ai-defaults";
 import { api } from "@/lib/api";
 import { IdentitySection } from "./IdentitySection";
 import { ThemeToggle } from "./ThemeToggle";
@@ -46,13 +47,8 @@ export function SettingsPage() {
     mutationFn: () => api.saveSettings(draft),
     onSuccess: (r) => {
       setDraft({});
-      setNotice(
-        r.account
-          ? `บันทึกแล้ว — โทเคนเป็นของ ${r.account.name} (${r.account.email})`
-          : `บันทึกแล้ว: ${r.saved.join(", ")}`,
-      );
+      setNotice(`บันทึกแล้ว: ${r.saved.join(", ")}`);
       queryClient.invalidateQueries({ queryKey: ["settings"] });
-      queryClient.invalidateQueries({ queryKey: ["me"] });
     },
     onError: (e) => setNotice((e as Error).message),
   });
@@ -60,7 +56,7 @@ export function SettingsPage() {
   const syncTypes = useMutation({
     mutationFn: api.syncTaskTypes,
     onSuccess: (r) => {
-      setNotice(`ดึงจาก workload แล้ว: ประเภทงาน ${r.synced} แบบ · โปรเจกต์ ${r.projects} รายการ`);
+      setNotice(`sync task types แล้ว ${r.synced} แบบ`);
       queryClient.invalidateQueries({ queryKey: ["taskTypes"] });
     },
     onError: (e) => setNotice((e as Error).message),
@@ -135,11 +131,11 @@ export function SettingsPage() {
         <section className="space-y-3 rounded-xl border border-border bg-surface p-3.5">
           <Label>บัญชีสำหรับส่งรายงาน</Label>
           <Field
-            label="โทเคนของเว็บ workload"
+            label="โทเคน (JWT)"
             hint={
               settingsQuery.data?.jwtExpiresAt
-                ? `หมดอายุ ${new Date(settingsQuery.data.jwtExpiresAt).toLocaleString("th-TH")}${settingsQuery.data.jwtExpired ? " — หมดแล้ว วางใหม่" : " (โทเคนเว็บอยู่ได้ 8 ชั่วโมง)"}`
-                : "เปิด workloads.ketspace.io → DevTools → Application → Local Storage → คัดลอกค่า workload.access_token"
+                ? `หมดอายุ ${new Date(settingsQuery.data.jwtExpiresAt).toLocaleString("th-TH")}${settingsQuery.data.jwtExpired ? " — หมดแล้ว วางใหม่" : ""}`
+                : "เปิด workloads.ketspace.io แล้วคัดลอกค่า localStorage[\"workload.access_token\"] (อายุ 8 ชม.)"
             }
           >
             <textarea
@@ -151,18 +147,18 @@ export function SettingsPage() {
             />
           </Field>
           <p className="text-[12px] text-muted">
-            ทุกรายการที่ส่งจะขึ้นในชื่อเจ้าของโทเคน
-            {current.task_by ? (
+            {settingsQuery.data?.account ? (
               <>
-                {" "}— ตอนนี้คือ <b>{current.task_by}</b> ({current.email})
+                ส่งรายงานในนาม <b>{settingsQuery.data.account.name || "?"}</b> ·{" "}
+                {settingsQuery.data.account.email} — ตามเจ้าของโทเคน
               </>
             ) : (
-              " — วางโทเคนแล้วระบบจะเช็คชื่อให้เอง"
+              "รายงานทุกรายการถูกบันทึกในนามเจ้าของโทเคนนี้"
             )}
           </p>
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => syncTypes.mutate()} disabled={syncTypes.isPending}>
-              {syncTypes.isPending && <Spinner />} ดึงประเภทงาน/โปรเจกต์ใหม่
+              {syncTypes.isPending && <Spinner />} ดึงประเภทงานใหม่
             </Button>
             <span className="text-[12px] text-muted">
               มี {taskTypesQuery.data?.taskTypes.length ?? 0} ประเภท
@@ -209,9 +205,9 @@ export function SettingsPage() {
         <section className="space-y-3 rounded-xl border border-border bg-surface p-3.5">
           <Label>การสร้างรายงาน</Label>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="โมเดล" hint="เว้นว่างเพื่อใช้ค่าเริ่มต้น">
+            <Field label="โมเดล" hint={`เว้นว่างเพื่อใช้ค่าเริ่มต้น ${DEFAULT_AI_MODEL}`}>
               <Input
-                placeholder="เช่น sonnet"
+                placeholder={DEFAULT_AI_MODEL}
                 value={value("ai_model")}
                 onChange={(e) => set("ai_model", e.target.value)}
                 className="w-full font-mono"

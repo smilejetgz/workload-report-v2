@@ -4,13 +4,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Button, Chip, Label, Spinner } from "./ui";
 
-/** Identity: which git users are me, and which workload account the token
- *  belongs to. The two must be the same person — commits are the evidence,
- *  and the site files every uploaded row under the token's owner. */
+/** Identity: which git users are me, and which workload account the report
+ *  lands under (the JWT's owner). The two must be the same person — commits
+ *  are the evidence, the workload account is where it is written. */
 export function IdentitySection() {
   const queryClient = useQueryClient();
   const authorsQuery = useQuery({ queryKey: ["gitAuthors"], queryFn: () => api.gitAuthors(), retry: 0 });
-  const meQuery = useQuery({ queryKey: ["me"], queryFn: api.me, retry: 0 });
+  const meQuery = useQuery({ queryKey: ["workloadMe"], queryFn: api.me, retry: 0 });
 
   const selected = authorsQuery.data?.selected ?? [];
   const isSelected = (author: { email: string; name: string }) =>
@@ -21,7 +21,7 @@ export function IdentitySection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["gitAuthors"] });
       queryClient.invalidateQueries({ queryKey: ["settings"] });
-      queryClient.invalidateQueries({ queryKey: ["me"] });
+      queryClient.invalidateQueries({ queryKey: ["workloadMe"] });
     },
   });
 
@@ -31,7 +31,6 @@ export function IdentitySection() {
   };
 
   const identity = meQuery.data?.identity;
-  const account = meQuery.data?.account;
   // A shared repo has dozens of contributors; ours belong at the top, and the
   // rest stays reachable behind a scroll rather than filling the page.
   const authors = [...(authorsQuery.data?.authors ?? [])].sort(
@@ -46,7 +45,7 @@ export function IdentitySection() {
       </div>
       <p className="text-[13px] text-muted">
         เลือก git user ได้หลายชื่อ ระบบจะนับเฉพาะ commit ของชื่อที่เลือก
-        และต้องเป็นคนเดียวกับเจ้าของโทเคน workload
+        และต้องเป็นคนเดียวกับชื่อที่ใช้ส่งรายงาน
       </p>
 
       {identity && identity.warnings.length > 0 && (
@@ -56,33 +55,6 @@ export function IdentitySection() {
           ))}
         </ul>
       )}
-
-      <div className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-medium">บัญชี workload ของโทเคนนี้</span>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => queryClient.invalidateQueries({ queryKey: ["me"] })}
-            disabled={meQuery.isFetching}
-          >
-            {meQuery.isFetching && <Spinner />} เช็คอีกครั้ง
-          </Button>
-        </div>
-        {meQuery.isError ? (
-          <p className="text-[12px] text-danger">{(meQuery.error as Error).message}</p>
-        ) : account ? (
-          <p className="text-[13px]">
-            <b>{account.name}</b> · <span className="font-mono text-xs text-muted">{account.email}</span>
-            <span className="ml-2 text-[12px] text-muted">
-              {account.role}
-              {account.positionIds.length > 0 && ` · ตำแหน่ง #${account.positionIds.join(", #")}`}
-            </span>
-          </p>
-        ) : (
-          <p className="text-[12px] text-muted">{meQuery.isFetching ? "กำลังเช็คกับ workload" : "ยังไม่ทราบ"}</p>
-        )}
-      </div>
 
       <div className="space-y-1.5">
         <div className="flex items-baseline gap-2">
@@ -122,6 +94,39 @@ export function IdentitySection() {
           </label>
         ))}
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-medium">บัญชี workload ที่ส่งรายงาน</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => queryClient.invalidateQueries({ queryKey: ["workloadMe"] })}
+            disabled={meQuery.isFetching}
+          >
+            {meQuery.isFetching && <Spinner />} ตรวจอีกครั้ง
+          </Button>
+        </div>
+        {meQuery.isError ? (
+          <p className="text-[12px] text-muted">{(meQuery.error as Error).message}</p>
+        ) : (
+          meQuery.data && (
+            <p className="text-[13px]">
+              <b>{meQuery.data.me.name}</b>{" "}
+              <span className="font-mono text-xs text-muted">{meQuery.data.me.email}</span>
+              {meQuery.data.me.positions.length > 0 && (
+                <span className="text-[12px] text-muted">
+                  {" "}
+                  · {meQuery.data.me.positions.map((p) => p.name).join(", ")}
+                </span>
+              )}
+            </p>
+          )
+        )}
+        <p className="text-[12px] text-muted">
+          มาจากโทเคนด้านบน — อยากส่งในนามคนอื่นต้องใช้โทเคนของคนนั้น
+        </p>
       </div>
     </section>
   );

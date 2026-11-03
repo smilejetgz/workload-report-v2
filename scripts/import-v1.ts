@@ -1,5 +1,6 @@
 // One-shot import from workload-report v1 (../workload-report/data.db):
-// settings (jwt, task_by, email) + projects + submitted cards → style corpus.
+// projects + submitted cards → style corpus. (The v1 JWT is not copied: the
+// app now writes to workload v2, which issues its own token.)
 // Run: npx tsx scripts/import-v1.ts [path-to-v1-data.db]
 
 import fs from "node:fs";
@@ -17,25 +18,6 @@ if (!fs.existsSync(v1DbPath)) {
 
 const v1 = new Database(v1DbPath, { readonly: true });
 const db = getDb();
-
-// --- settings ---------------------------------------------------------------
-const v1Settings = v1.prepare("select key, value from settings").all() as {
-  key: string;
-  value: string;
-}[];
-const wanted = new Set(["jwt", "task_by", "email"]);
-let settingsCopied = 0;
-for (const s of v1Settings) {
-  if (!wanted.has(s.key) || !s.value) continue;
-  db.insert(schema.settings)
-    .values({ key: s.key, value: s.value, updatedAt: new Date() })
-    .onConflictDoUpdate({
-      target: schema.settings.key,
-      set: { value: s.value, updatedAt: new Date() },
-    })
-    .run();
-  settingsCopied++;
-}
 
 // --- projects ---------------------------------------------------------------
 const v1Projects = v1
@@ -88,5 +70,5 @@ for (const c of v1Cards) {
 }
 
 console.log(
-  `import เสร็จ: settings ${settingsCopied}, projects ${projectsCopied}, style examples ${v1Cards.length}`,
+  `import เสร็จ: projects ${projectsCopied}, style examples ${v1Cards.length}`,
 );

@@ -1,7 +1,8 @@
-// Resolve a card's `website` (a URL or a name the AI/user typed) to a workload
-// project id. The site keeps one project per customer website, keyed by its
-// bare host ("pet-vet-store.com"), plus a couple of internal projects matched
-// by name ("Ketshopweb", "KetBill"). Pure function.
+// Host normalisation shared by the project lookup (sources/workload.matchProject)
+// and the reverse mapping for rows pulled back from the site. The site keeps one
+// project per customer website, keyed by its bare host ("pet-vet-store.com"),
+// plus a couple of internal projects matched by name ("Ketshopweb", "KetBill").
+// Pure functions.
 
 export type ProjectLike = {
   id: number;
@@ -20,22 +21,6 @@ export function normalizeHost(input: string | null | undefined): string {
     .split(/[/?#]/)[0]
     .replace(/^www\./, "")
     .trim();
-}
-
-export function resolveProjectId(
-  website: string | null | undefined,
-  projects: ProjectLike[],
-): number | null {
-  const host = normalizeHost(website);
-  if (!host) return null;
-  // Active projects first, so a retired duplicate never wins over the live one.
-  const ordered = [...projects].sort(
-    (a, b) => Number(b.isActive ?? true) - Number(a.isActive ?? true),
-  );
-  const byHost = ordered.find((p) => normalizeHost(p.websiteUrl) === host);
-  if (byHost) return byHost.id;
-  const byName = ordered.find((p) => normalizeHost(p.name) === host);
-  return byName?.id ?? null;
 }
 
 /** The other direction, for rows pulled back from the site. */

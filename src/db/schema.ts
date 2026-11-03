@@ -23,18 +23,16 @@ export const projects = sqliteTable("projects", {
   createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
-// Key-value settings: jwt (workload web session token), task_by + email +
-// workload_user_id + workload_position_ids (cached from GET /auth/me),
-// clickup_token, clickup_team_id, clickup_user_id, ai_model,
-// default_daily_hours, rules_md, git_authors, clickup_enabled
+// Key-value settings: jwt, clickup_token, clickup_team_id,
+// clickup_user_id, ai_model, default_daily_hours, rules_md
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
-// Synced from the workload API (GET /task-types). The AI may only pick from
-// this list, and only from the types the user's position is allowed to log.
+// Synced from workload API /task-types, narrowed to the types this user's
+// positions may log. AI may only pick from this list.
 export const taskTypes = sqliteTable("task_types", {
   id: integer("id").primaryKey(), // remote id
   name: text("name").notNull(),
@@ -43,13 +41,14 @@ export const taskTypes = sqliteTable("task_types", {
   // The type the site itself falls back to ("Others") — used for filler cards.
   isFallback: integer("is_fallback", { mode: "boolean" }).notNull().default(false),
   formKind: text("form_kind"), // "plain" | "meeting"
-  // Positions (workload position ids) allowed to log this type; empty = everyone.
+  // Positions (workload position ids) linked to this type on workload.
   positionIds: text("position_ids", { mode: "json" }).$type<number[]>().notNull().default([]),
   syncedAt: integer("synced_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
 });
 
-// Synced from the workload API (GET /projects): customer websites plus a few
-// internal projects. A card's `website` is resolved to one of these on upload.
+// Created by migration 0003 as a local cache of GET /projects. Not read any
+// more: submit and sync fetch projects live (workload-account.loadLookups).
+// Kept so the schema matches the migrations already applied.
 export const workloadProjects = sqliteTable("workload_projects", {
   id: integer("id").primaryKey(), // remote id
   name: text("name").notNull(),
@@ -291,3 +290,87 @@ export type Card = typeof cards.$inferSelect;
 export type TaskType = typeof taskTypes.$inferSelect;
 export type WorkloadProject = typeof workloadProjects.$inferSelect;
 export type DayTarget = typeof dayTargets.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Chat: ask the AI to change part of the report
+// ---------------------------------------------------------------------------
+
+/** "range:<from>:<to>" · "day:<date>" · "card:<id>" — what a thread may change. */
+export type ChatScopeKind = "range" | "day" | "card";
+
+export const chatThreads = sqliteTable(
+  "chat_threads",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    scopeKey: text("scope_key").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  },
+  (t) => [index("chat_threads_scope").on(t.scopeKey)],
+);
+
+/** One change the AI proposes. Hours are seconds, already checked by code. */
+export type ChatOp =
+  | {
+      op: "update";
+      cardId: number;
+      topic?: string;
+      noteHtml?: string;
+      taskType?: string;
+      durationSec?: number;
+      evidence?: CardEvidence;
+    }
+  | {
+      op: "create";
+      date: string;
+      topic: string;
+      noteHtml: string;
+      taskType: string;
+      durationSec: number;
+      evidence: CardEvidence;
+    }
+  | { op: "delete"; cardId: number };
+
+/** What the cards looked like when the proposal was made — for the diff and the stale check. */
+export type ChatCardSnapshot = {
+  id: number;
+  tasksDate: string;
+  topic: string;
+  noteHtml: string;
+  taskType: string;
+  durationSec: number;
+  status: string;
+  remoteTaskId: string | null;
+  updatedAt: number | null;
+};
+
+export type ChatProposal = { ops: ChatOp[]; before: ChatCardSnapshot[] };
+
+/** Coverage items the user picked to have the AI work into the report. */
+export type ChatAttachment =
+  | { kind: "commit"; hash: string; date: string; project: string; message: string }
+  | { kind: "task"; taskId: string; customId: string | null; name: string; date: string | null };
+
+export type ChatProposalStatus = "pending" | "applied" | "discarded";
+
+export const chatMessages = sqliteTable(
+  "chat_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    threadId: integer("thread_id")
+      .notNull()
+      .references(() => chatThreads.id, { onDelete: "cascade" }),
+    role: text("role").$type<"user" | "assistant">().notNull(),
+    text: text("text").notNull(),
+    attachments: text("attachments", { mode: "json" }).$type<ChatAttachment[]>(),
+    proposal: text("proposal", { mode: "json" }).$type<ChatProposal>(),
+    proposalStatus: text("proposal_status").$type<ChatProposalStatus>(),
+    /** Outcome of applying, shown under the proposal (remote sync failures etc.). */
+    applyNote: text("apply_note"),
+    error: text("error"),
+    createdAt: integer("created_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  },
+  (t) => [index("chat_messages_thread").on(t.threadId)],
+);
+
+export type ChatThread = typeof chatThreads.$inferSelect;
+export type ChatMessage = typeof chatMessages.$inferSelect;

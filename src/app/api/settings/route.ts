@@ -2,7 +2,6 @@ import { z } from "zod";
 import { getSelectedAuthors } from "@/server/authors";
 import { checkIdentity } from "@/server/engine/identity";
 import { fail, handle, ok, parseBody } from "@/server/http";
-import { cachedAccount, refreshMe } from "@/server/me";
 import {
   getAllSettings,
   getSetting,
@@ -11,7 +10,7 @@ import {
   setSetting,
   type SettingKey,
 } from "@/server/settings";
-import { jwtExpiry } from "@/server/sources/workload";
+import { jwtExpiry, jwtIdentity } from "@/server/sources/workload";
 
 export function GET() {
   return handle(() => {
@@ -27,11 +26,18 @@ export function GET() {
     }
     const jwt = getSetting("jwt");
     const expiry = jwt ? jwtExpiry(jwt) : null;
-    const identity = checkIdentity({ account: cachedAccount(), gitAuthors: getSelectedAuthors() });
+    // Read from the token offline; /api/me asks the server.
+    const account = jwt ? jwtIdentity(jwt) : null;
+    const identity = checkIdentity({
+      workloadEmail: account?.email ?? null,
+      workloadName: account?.name ?? null,
+      gitAuthors: getSelectedAuthors(),
+    });
     return ok({
       settings: out,
       gitAuthors: getSelectedAuthors(),
       identity,
+      account: account ? { name: account.name, email: account.email, role: account.role } : null,
       jwtExpiresAt: expiry?.toISOString() ?? null,
       jwtExpired: expiry ? expiry.getTime() < Date.now() : null,
     });
@@ -51,16 +57,6 @@ export function PUT(request: Request) {
     const entries = Object.entries(parsed.data.values) as [SettingKey, string][];
     if (entries.length === 0) return fail("ไม่มีค่าให้บันทึก");
     for (const [key, value] of entries) setSetting(key, value.trim());
-
-    // A new token means a possibly different person: look them up right away
-    // so the page can say whose name the reports will land under.
-    const jwt = parsed.data.values.jwt?.trim();
-    if (jwt) {
-      const me = await refreshMe(jwt);
-      if (me.authExpired) return fail("โทเคนนี้ใช้กับ workload ไม่ได้ (401) — คัดลอกใหม่จากเว็บ", 401);
-      if (!me.ok) return fail(`บันทึกแล้ว แต่เช็คบัญชีกับ workload ไม่สำเร็จ (${me.status})`, 502);
-      return ok({ saved: entries.map(([k]) => k), account: me.data });
-    }
     return ok({ saved: entries.map(([k]) => k) });
   });
 }

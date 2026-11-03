@@ -15,7 +15,16 @@ const UPLOAD_DOT: Record<string, string> = {
   failed: "bg-danger",
 };
 
-export function CardItem({ card, taskTypes }: { card: Card; taskTypes: TaskType[] }) {
+export function CardItem({
+  card,
+  taskTypes,
+  onOpenChat,
+}: {
+  card: Card;
+  taskTypes: TaskType[];
+  /** Open the AI chat scoped to this card. */
+  onOpenChat?: (card: Card) => void;
+}) {
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -168,6 +177,11 @@ export function CardItem({ card, taskTypes }: { card: Card; taskTypes: TaskType[
             </>
           ) : (
             <>
+              {onOpenChat && (
+                <Button size="sm" variant="ghost" onClick={() => onOpenChat(card)}>
+                  แชท
+                </Button>
+              )}
               <Button size="sm" variant="ghost" onClick={() => setIsEditing(true)}>
                 แก้ไข
               </Button>
@@ -181,7 +195,7 @@ export function CardItem({ card, taskTypes }: { card: Card; taskTypes: TaskType[
         {topicRepeatsNote ? (
           <span className="sr-only">{card.topic}</span>
         ) : (
-          <p className="pr-24 font-medium leading-snug break-words">{card.topic}</p>
+          <p className="pr-36 font-medium leading-snug break-words">{card.topic}</p>
         )}
 
         <div

@@ -1,85 +1,79 @@
-// Client for the company workload site (workloads.ketspace.io) — the REST API
-// its own calendar page uses, reverse-engineered from the site's bundle and
-// verified against the live service on 2 Oct 2026.
+// Client for the company workload v2 API (workloads.ketspace.io/api).
+// All calls take an explicit jwt — the access token the workload web app
+// keeps in localStorage["workload.access_token"]. Identity comes from that
+// token alone: the server never reads who the work belongs to from the body.
 //
-// Auth is the site's web session token (localStorage["workload.access_token"],
-// a JWT that lives 8 hours). Every call takes it explicitly; a 401/403 is
-// surfaced as { authExpired: true } so the UI can ask for a fresh one.
-//
-// Identity is implied by the token: the server stores the row under the
-// token's user, so no name/email travels with a task any more.
+// Only a 401 means the token is dead. A 403 here is a real refusal (e.g. a
+// task type the user's position may not log), so it is reported as an error.
 
-const BASE_URL = process.env.WORKLOAD_API_BASE ?? "https://workloads.ketspace.io/api";
+import { normalizeHost } from "@/server/engine/project-match";
 
-/** my-day calls for a date range run this many at a time. */
-const RANGE_CONCURRENCY = 4;
-
-export type RemoteMe = {
-  id: number;
-  email: string;
-  name: string;
-  role: string;
-  positionIds: number[];
-};
+const BASE_URL = (process.env.WORKLOAD_API_BASE ?? "https://workloads.ketspace.io/api").replace(
+  /\/+$/,
+  "",
+);
 
 export type RemoteTaskType = {
   id: number;
   name: string;
   color: string | null;
   isActive: boolean;
+  sortOrder: number | null;
+  /** The type the site falls back to ("Others"). */
   isFallback: boolean;
-  formKind: string | null;
+  /** Positions that may log this type. A held position listed nowhere may log any type. */
   positionIds: number[];
 };
 
 export type RemoteProject = {
   id: number;
   name: string;
-  kind: string;
   websiteUrl: string | null;
   isActive: boolean;
 };
 
-/**
- * One row on the site, normalised from either shape the API uses: a my-day
- * item (`taskId`, `durationSec`, `taskTypeName`) or a /tasks list item (`id`,
- * `assignees[].durationSec`, `legacyId`, `workDate`).
- */
+export type RemoteMe = {
+  id: number;
+  name: string;
+  email: string;
+  role: string;
+  positions: { positionId: number; name: string; isPrimary: boolean }[];
+};
+
+/** One row of GET /tasks, reduced to what this app reads. */
 export type RemoteTask = {
   id: number;
-  userId: number | null;
   workDate: string; // YYYY-MM-DD
-  title: string;
-  taskTypeId: number | null;
-  taskTypeName: string | null;
-  projectId: number | null;
-  projectName: string | null;
+  /** The caller's own hours on this task — other assignees are not ours. */
   durationSec: number;
-  /** `agendaNote` on the wire. HTML for rows this app wrote (and the migrated
-   *  ones); plain text when typed into the site's own note box. */
-  note: string;
+  title: string;
+  /** agendaNote — the rich-text HTML body; empty when only a title was entered. */
+  noteHtml: string;
+  taskTypeId: number;
+  projectId: number | null;
   clickupTaskId: string | null;
-  clickupUrl: string | null;
-  /** The row's id on the old workload system, kept by the migration. */
+  /** The row's id on the old (v1) workload, kept by the data migration. */
   legacyId: number | null;
 };
 
-/** One row of POST /tasks/batch: `id` present = update that row, absent = create. */
+/** POST /tasks/batch item — no taskId creates, a taskId edits that row. */
 export type BatchItem = {
-  id?: number;
+  taskId?: number;
   taskTypeId: number;
-  projectId: number | null;
+  projectId?: number | null;
   durationSec: number;
-  title: string;
-  note: string;
-  clickupTaskId: string | null;
+  title?: string;
+  note?: string;
+  clickupTaskId?: string | null;
 };
 
-export type BatchDayInput = {
-  workDate: string;
-  items: BatchItem[];
-  /** Row ids to delete in the same call. */
-  remove?: number[];
+export type BatchLog = { workDate: string; items?: BatchItem[]; remove?: number[] };
+
+export type BatchResult = {
+  created: number[];
+  updated: number[];
+  removed: number[];
+  dayTotalSec: number;
 };
 
 export type WorkloadResult<T> = {
@@ -87,16 +81,22 @@ export type WorkloadResult<T> = {
   status: number;
   authExpired: boolean;
   data: T;
-  body: unknown;
-  /** The server's own message on an error body (NestJS `{ message }`), if any. */
+  /** Server's error message (Thai), when it gave one. */
   message: string | null;
+  /** For batch errors: which item (0-based) the server rejected. */
+  index: number | null;
+  body: unknown;
 };
 
-function serverMessage(body: unknown): string | null {
-  const message = (body as { message?: unknown })?.message;
-  if (typeof message === "string") return message;
-  if (Array.isArray(message)) return message.map(String).join("; ");
-  return null;
+function errorDetail(body: unknown): { message: string | null; index: number | null } {
+  if (!body || typeof body !== "object") return { message: null, index: null };
+  const { message, index } = body as { message?: unknown; index?: unknown };
+  const text = Array.isArray(message)
+    ? message.map(String).join(", ")
+    : typeof message === "string"
+      ? message
+      : null;
+  return { message: text, index: typeof index === "number" ? index : null };
 }
 
 async function request<T>(
@@ -108,226 +108,167 @@ async function request<T>(
   const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
     headers: {
-      accept: "application/json",
       ...(init.body ? { "content-type": "application/json" } : {}),
       authorization: `Bearer ${jwt}`,
       ...init.headers,
     },
   });
   const body: unknown = await res.json().catch(() => ({}));
+  const detail = res.ok ? { message: null, index: null } : errorDetail(body);
   return {
     ok: res.ok,
     status: res.status,
-    authExpired: res.status === 401 || res.status === 403,
-    data: pickData(body),
+    authExpired: res.status === 401,
+    data: pickData(res.ok ? body : null),
+    ...detail,
     body,
-    message: res.ok ? null : serverMessage(body),
   };
 }
 
-// ---------------------------------------------------------------------------
-// Normalisers — exported so the shapes can be pinned by tests without a server.
-// ---------------------------------------------------------------------------
-
-const asNumber = (v: unknown): number | null => {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
-  return null;
-};
-const asString = (v: unknown): string | null => (typeof v === "string" ? v : null);
-const asNumberArray = (v: unknown): number[] =>
-  Array.isArray(v) ? v.map(asNumber).filter((n): n is number => n !== null) : [];
-const asRecord = (v: unknown): Record<string, unknown> | null =>
-  v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
-
-export function toRemoteMe(raw: unknown): RemoteMe | null {
-  const r = asRecord(raw);
-  const id = r ? asNumber(r.id) : null;
-  if (!r || id === null) return null;
-  const positions = Array.isArray(r.positions) ? r.positions : [];
-  return {
-    id,
-    email: asString(r.email) ?? "",
-    name: asString(r.name) ?? "",
-    role: asString(r.role) ?? "",
-    positionIds: positions
-      .map((p) => asNumber(asRecord(p)?.positionId))
-      .filter((n): n is number => n !== null),
-  };
+/** "workload ตอบ 409: เกินเพดาน 24 ชม./คน/วัน …" — for logs and card errors. */
+export function describeFailure(label: string, res: WorkloadResult<unknown>): string {
+  return `${label} ตอบ ${res.status}${res.message ? `: ${res.message}` : ""}`;
 }
 
-export function toRemoteTaskType(raw: unknown): RemoteTaskType | null {
-  const r = asRecord(raw);
-  const id = r ? asNumber(r.id) : null;
-  const name = r ? asString(r.name) : null;
-  if (!r || id === null || !name) return null;
-  return {
-    id,
-    name,
-    color: asString(r.color),
-    isActive: r.isActive === undefined ? true : Boolean(r.isActive),
-    isFallback: Boolean(r.isFallback),
-    formKind: asString(r.formKind),
-    positionIds: asNumberArray(r.positionIds),
-  };
-}
+const asArray = (body: unknown): Record<string, unknown>[] =>
+  Array.isArray(body) ? (body as Record<string, unknown>[]) : [];
 
-export function toRemoteProject(raw: unknown): RemoteProject | null {
-  const r = asRecord(raw);
-  const id = r ? asNumber(r.id) : null;
-  const name = r ? asString(r.name) : null;
-  if (!r || id === null || !name) return null;
-  return {
-    id,
-    name,
-    kind: asString(r.kind) ?? "website",
-    websiteUrl: asString(r.websiteUrl),
-    isActive: r.isActive === undefined ? true : Boolean(r.isActive),
-  };
-}
+const num = (v: unknown): number => Number(v) || 0;
+const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 
-export function toRemoteTask(raw: unknown, fallbackDate = ""): RemoteTask | null {
-  const r = asRecord(raw);
-  const id = r ? (asNumber(r.id) ?? asNumber(r.taskId)) : null;
-  if (!r || id === null) return null;
-  // A soft-deleted row in the list is not on the calendar any more.
-  if (r.deletedAt) return null;
-  const workDate = (asString(r.workDate) ?? fallbackDate).slice(0, 10);
-  const assignees = (Array.isArray(r.assignees) ? r.assignees : []).map(asRecord);
-  // my-day carries the seconds directly; the list keeps them per assignee.
-  const durationSec =
-    asNumber(r.durationSec) ??
-    (assignees.length > 0
-      ? assignees.reduce((sum, a) => sum + (asNumber(a?.durationSec) ?? 0), 0)
-      : Math.round((asNumber(r.hours) ?? 0) * 3600));
-  return {
-    id,
-    userId: asNumber(r.userId) ?? asNumber(r.loggedBy) ?? asNumber(assignees[0]?.userId),
-    workDate,
-    title: asString(r.title) ?? "",
-    taskTypeId: asNumber(r.taskTypeId),
-    taskTypeName: asString(r.taskTypeName) ?? asString(asRecord(r.taskType)?.name),
-    projectId: asNumber(r.projectId),
-    projectName: asString(r.projectName) ?? asString(asRecord(r.project)?.name),
-    durationSec,
-    note: asString(r.agendaNote) ?? asString(r.note) ?? "",
-    clickupTaskId: asString(r.clickupTaskId),
-    clickupUrl: asString(r.clickupUrl),
-    legacyId: asNumber(r.legacyId),
-  };
-}
-
-const list =
-  <T>(convert: (raw: unknown) => T | null) =>
-  (body: unknown): T[] => {
-    const rows = Array.isArray(body) ? body : ((body as { items?: unknown })?.items ?? []);
-    return (Array.isArray(rows) ? rows : []).map(convert).filter((x): x is T => x !== null);
-  };
-
-// ---------------------------------------------------------------------------
-// Endpoints
-// ---------------------------------------------------------------------------
-
-/** Who the token belongs to — this is who every uploaded row lands under. */
 export function getMe(jwt: string): Promise<WorkloadResult<RemoteMe | null>> {
-  return request("/auth/me", jwt, {}, toRemoteMe);
+  return request("/auth/me", jwt, {}, (body) => {
+    if (!body || typeof body !== "object") return null;
+    const row = body as Record<string, unknown>;
+    return {
+      id: num(row.id),
+      name: str(row.name) ?? "",
+      email: str(row.email) ?? "",
+      role: str(row.role) ?? "",
+      positions: asArray(row.positions).map((p) => ({
+        positionId: num(p.positionId),
+        name: str(p.name) ?? "",
+        isPrimary: Boolean(p.isPrimary),
+      })),
+    };
+  });
 }
 
 export function getTaskTypes(jwt: string): Promise<WorkloadResult<RemoteTaskType[]>> {
-  return request("/task-types", jwt, {}, list(toRemoteTaskType));
-}
-
-export function getProjects(jwt: string): Promise<WorkloadResult<RemoteProject[]>> {
-  return request("/projects", jwt, {}, list(toRemoteProject));
-}
-
-/** The token owner's rows for one day. */
-export function getMyDay(jwt: string, date: string): Promise<WorkloadResult<RemoteTask[]>> {
-  return request(`/tasks/my-day?date=${encodeURIComponent(date)}`, jwt, {}, (body) =>
-    list((raw) => toRemoteTask(raw, date))(body),
+  return request("/task-types", jwt, {}, (body) =>
+    asArray(body).map((t) => ({
+      id: num(t.id),
+      name: str(t.name) ?? "",
+      color: str(t.color),
+      isActive: t.isActive !== false && t.isActive !== 0,
+      sortOrder: t.sortOrder == null ? null : num(t.sortOrder),
+      isFallback: Boolean(t.isFallback),
+      positionIds: Array.isArray(t.positionIds) ? t.positionIds.map(num) : [],
+    })),
   );
 }
 
-export function listDates(fromYMD: string, toYMD: string): string[] {
-  const dates: string[] = [];
-  const cursor = new Date(`${fromYMD}T00:00:00Z`);
-  const end = new Date(`${toYMD}T00:00:00Z`);
-  if (Number.isNaN(cursor.getTime()) || Number.isNaN(end.getTime())) return dates;
-  while (cursor <= end) {
-    dates.push(cursor.toISOString().slice(0, 10));
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return dates;
+/**
+ * Task types this person may log — the same rule the server enforces on write
+ * (and the MCP list_task_types tool): no position, or a position no type is
+ * linked to, may log every type; otherwise only types linked to a held position.
+ */
+export function allowedTaskTypes(
+  types: RemoteTaskType[],
+  heldPositionIds: number[],
+): RemoteTaskType[] {
+  const active = types.filter((t) => t.isActive);
+  const linked = new Set(types.flatMap((t) => t.positionIds));
+  const allowAll = heldPositionIds.length === 0 || heldPositionIds.some((id) => !linked.has(id));
+  const held = new Set(heldPositionIds);
+  return active
+    .filter((t) => allowAll || t.positionIds.some((id) => held.has(id)))
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.id - b.id);
 }
 
-/** Largest page the list endpoint allows (its `maxLimit`). */
-const LIST_PAGE = 500;
+export function getProjects(jwt: string): Promise<WorkloadResult<RemoteProject[]>> {
+  return request("/projects", jwt, {}, (body) =>
+    asArray(body).map((p) => ({
+      id: num(p.id),
+      name: str(p.name) ?? "",
+      websiteUrl: str(p.websiteUrl),
+      isActive: p.isActive !== false && p.isActive !== 0,
+    })),
+  );
+}
 
-/**
- * The token owner's rows for a date range from GET /tasks (staff only ever see
- * their own rows there). Paginated, and the only read that carries `legacyId`
- * — the bridge from rows uploaded to the old system.
- */
-export async function getMyRange(
-  jwt: string,
-  fromYMD: string,
-  toYMD: string,
-): Promise<WorkloadResult<RemoteTask[]>> {
-  const rows: RemoteTask[] = [];
-  let offset = 0;
-  for (;;) {
+function toRemoteTask(row: Record<string, unknown>, userId: number): RemoteTask {
+  const mine = asArray(row.assignees).find((a) => num(a.userId) === userId);
+  return {
+    id: num(row.id),
+    workDate: String(row.workDate ?? "").slice(0, 10),
+    durationSec: num(mine?.durationSec),
+    title: str(row.title) ?? "",
+    noteHtml: str(row.agendaNote) ?? "",
+    taskTypeId: num(row.taskTypeId),
+    projectId: row.projectId == null ? null : num(row.projectId),
+    clickupTaskId: str(row.clickupTaskId),
+    legacyId: row.legacyId == null ? null : num(row.legacyId),
+  };
+}
+
+const PAGE_LIMIT = 500; // the server's maximum
+
+/** Every task the user is an assignee on in [from, to], following pages. */
+export async function listMyTasks(input: {
+  jwt: string;
+  userId: number;
+  from: string;
+  to: string;
+}): Promise<WorkloadResult<RemoteTask[]>> {
+  const all: RemoteTask[] = [];
+  for (let offset = 0; ; offset += PAGE_LIMIT) {
     const query = new URLSearchParams({
-      from: fromYMD,
-      to: toYMD,
-      limit: String(LIST_PAGE),
+      from: input.from,
+      to: input.to,
+      user_ids: String(input.userId),
+      limit: String(PAGE_LIMIT),
       offset: String(offset),
     });
-    const page = await request(`/tasks?${query}`, jwt, {}, (body) => ({
-      items: list(toRemoteTask)(body),
-      total: asNumber((body as { total?: unknown })?.total) ?? 0,
-      count: Array.isArray((body as { items?: unknown })?.items)
-        ? ((body as { items: unknown[] }).items.length)
-        : 0,
-    }));
-    if (!page.ok) return { ...page, data: [] };
-    rows.push(...page.data.items);
-    offset += page.data.count;
-    if (page.data.count === 0 || offset >= page.data.total) break;
+    const res = await request(`/tasks?${query}`, input.jwt, {}, (body) => {
+      const page = (body ?? {}) as { items?: unknown; total?: unknown };
+      return { items: asArray(page.items), total: num(page.total) };
+    });
+    if (!res.ok) return { ...res, data: all };
+    all.push(...res.data.items.map((row) => toRemoteTask(row, input.userId)));
+    if (res.data.items.length === 0 || offset + PAGE_LIMIT >= res.data.total) {
+      return { ...res, data: all };
+    }
   }
-  return { ok: true, status: 200, authExpired: false, data: rows, body: null, message: null };
 }
 
-/**
- * Day-by-day read through my-day — the shape the site's own calendar uses,
- * kept for callers that need a specific day re-read after a write.
- */
-export async function getMyDays(
-  jwt: string,
-  fromYMD: string,
-  toYMD: string,
-): Promise<WorkloadResult<RemoteTask[]>> {
-  const dates = listDates(fromYMD, toYMD);
-  const rows: RemoteTask[] = [];
-  for (let i = 0; i < dates.length; i += RANGE_CONCURRENCY) {
-    const chunk = dates.slice(i, i + RANGE_CONCURRENCY);
-    const results = await Promise.all(chunk.map((d) => getMyDay(jwt, d)));
-    const failed = results.find((r) => !r.ok);
-    if (failed) return { ...failed, data: [] };
-    for (const r of results) rows.push(...r.data);
-  }
-  return { ok: true, status: 200, authExpired: false, data: rows, body: null, message: null };
+/** Add, edit and remove one person-day in one all-or-nothing request. */
+export function batchLog(input: {
+  jwt: string;
+  log: BatchLog;
+}): Promise<WorkloadResult<BatchResult>> {
+  return request(
+    "/tasks/batch",
+    input.jwt,
+    { method: "POST", body: JSON.stringify(input.log) },
+    (body) => {
+      const b = (body ?? {}) as Record<string, unknown>;
+      const ids = (v: unknown) => (Array.isArray(v) ? v.map(num) : []);
+      return {
+        created: ids(b.created),
+        updated: ids(b.updated),
+        removed: ids(b.removed),
+        dayTotalSec: num(b.dayTotalSec),
+      };
+    },
+  );
 }
 
-/**
- * Upsert one day in a single call — the same request the site's calendar
- * sends. Rows with `id` are updated, rows without are created, `remove`
- * deletes. The response body is not relied on: callers read the day back
- * with getMyDay to learn ids and confirm what landed.
- */
-export function batchDay(jwt: string, input: BatchDayInput): Promise<WorkloadResult<unknown>> {
-  const payload: Record<string, unknown> = { workDate: input.workDate, items: input.items };
-  if (input.remove && input.remove.length > 0) payload.remove = input.remove;
-  return request("/tasks/batch", jwt, { method: "POST", body: JSON.stringify(payload) }, (b) => b);
+/** Soft-deletes the task. 404 = not visible to us (already gone, or never ours). */
+export function deleteTask(input: { jwt: string; id: number }): Promise<WorkloadResult<boolean>> {
+  return request(`/tasks/${input.id}`, input.jwt, { method: "DELETE" }, (body) =>
+    Boolean((body as { deleted?: unknown } | null)?.deleted),
+  );
 }
 
 /** Decode JWT payload without verifying (we only inspect tokens the user pastes). */
@@ -348,4 +289,78 @@ export function jwtExpiry(jwt: string): Date | null {
   const payload = decodeJwt(jwt);
   const exp = payload?.exp;
   return typeof exp === "number" ? new Date(exp * 1000) : null;
+}
+
+/** Who the token belongs to — the server writes every row under this user. */
+export type JwtIdentity = { userId: number; email: string; name: string; role: string };
+
+export function jwtIdentity(jwt: string): JwtIdentity | null {
+  const payload = decodeJwt(jwt);
+  const userId = Number(payload?.sub);
+  if (!payload || !Number.isInteger(userId) || userId <= 0) return null;
+  return {
+    userId,
+    email: typeof payload.email === "string" ? payload.email : "",
+    name: typeof payload.name === "string" ? payload.name : "",
+    role: typeof payload.role === "string" ? payload.role : "",
+  };
+}
+
+// --- remote ids --------------------------------------------------------------
+// Cards submitted to the old workload carry that system's row id, stored as
+// "v1:<id>" since the switch. They are never sent as a v2 task id — a v1 id
+// can equal an unrelated v2 row of ours. Reconcile re-links them through the
+// legacyId the data migration kept on each v2 row.
+
+const LEGACY_PREFIX = "v1:";
+
+export function isLegacyRemoteId(remoteTaskId: string | null): boolean {
+  return Boolean(remoteTaskId?.startsWith(LEGACY_PREFIX));
+}
+
+export function legacyRemoteId(legacyId: number): string {
+  return `${LEGACY_PREFIX}${legacyId}`;
+}
+
+/** The v2 task id behind a card's remote id, or null when it has none / is a v1 id. */
+export function v2TaskId(remoteTaskId: string | null): number | null {
+  if (!remoteTaskId || !/^\d+$/.test(remoteTaskId)) return null;
+  return Number(remoteTaskId);
+}
+
+// --- field mapping -----------------------------------------------------------
+
+/** ClickUp id/URL the server accepts (db/src/clickup.ts) — anything else 400s the whole day. */
+export function clickupTaskIdForUpload(value: string | null): string | null {
+  const text = value?.trim() ?? "";
+  if (!text) return null;
+  const fromUrl = text.match(/app\.clickup\.com\/t\/(?:\d+\/)?([A-Za-z0-9_-]+)/);
+  const id = fromUrl ? fromUrl[1] : text;
+  return /^(?=.*[A-Za-z0-9])[A-Za-z0-9_-]{1,50}$/.test(id) ? id : null;
+}
+
+const TITLE_MAX = 255; // tasks.title is varchar(255)
+
+export function titleForUpload(topic: string): string | undefined {
+  const text = topic.replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, TITLE_MAX) : undefined;
+}
+
+/**
+ * The project a card's free-text website/project field names: an exact
+ * (case-insensitive) project name, or the same host as a project's website.
+ * null when nothing matches — the task is then logged without a project.
+ */
+export function matchProject(
+  website: string | null,
+  projects: RemoteProject[],
+): RemoteProject | null {
+  const text = website?.trim().toLowerCase() ?? "";
+  if (!text) return null;
+  const active = projects.filter((p) => p.isActive);
+  const byName = active.find((p) => p.name.trim().toLowerCase() === text);
+  if (byName) return byName;
+  const host = normalizeHost(text);
+  if (!host) return null;
+  return active.find((p) => p.websiteUrl && normalizeHost(p.websiteUrl) === host) ?? null;
 }

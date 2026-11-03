@@ -8,22 +8,16 @@ import { filterMyCommits } from "./authors";
 import { resolveDayTargets, type ResolvedDayTarget } from "./day-targets";
 import { getDefaultDailySec, getSetting } from "./settings";
 import { refreshEvidence } from "./sync";
-import { getMyRange, type RemoteTask } from "./sources/workload";
-import {
-  allowedTaskTypes,
-  fallbackTaskType,
-  listTaskTypes,
-  myPositionIds,
-  syncProjects,
-  syncTaskTypes,
-} from "./workload-ref";
+import { fetchRemoteRange } from "./remote-sync";
+import type { RemoteTaskLike } from "./engine/reconcile";
+import { syncAllowedTaskTypes, workloadAccount } from "./workload-account";
 import { resolveClickupLink } from "./engine/clickup-link";
 import { buildDayEvidence, hasDayEvidence, type DayEvidence } from "./engine/evidence";
 import { buildDayPrompt } from "./engine/prompt";
 import { parseDayPlan, validateDayPlan, type DayPlan } from "./engine/validator";
 import { allocate, MAX_CARD_SEC, STEP_SEC } from "./engine/allocator";
 import type { AiProvider } from "./ai/provider";
-import { isTransientAiError } from "./ai/cli";
+import { DEFAULT_AI_MODEL, isTransientAiError } from "./ai/cli";
 import { sumUsage, type AiUsage } from "./ai/usage";
 import { appendLog, type RunLogger } from "./run-log";
 
@@ -109,7 +103,7 @@ export async function executeRun(
     const { remoteTasks, remoteWarning } = await fetchRemoteTasks(fromYMD, toYMD);
     if (remoteWarning) log("warn", remoteWarning);
     else log("info", `เช็คของที่อยู่บน workload แล้ว ${remoteTasks.length} รายการ`);
-    const { taskTypeNames, fallbackTaskTypeName } = await ensureTaskTypes();
+    const { taskTypeNames, fillerTaskType } = await ensureTaskTypes(log);
     log("info", `ประเภทงานที่เลือกได้ ${taskTypeNames.length} แบบ`);
 
     for (const date of regenerate) {
@@ -130,7 +124,7 @@ export async function executeRun(
     log(
       "info",
       `หลักฐานในช่วงนี้: ${shared.commits.length} commit ของเรา · ${shared.tasks.length} task ใน ClickUp` +
-        (shared.aiModel ? ` · โมเดล ${shared.aiModel}` : " · โมเดลค่าเริ่มต้นของ CLI"),
+        ` · โมเดล ${shared.aiModel}`,
     );
     const queue = [...workDays];
     const failures: string[] = [...sync.warnings];
@@ -152,7 +146,7 @@ export async function executeRun(
             day,
             remoteTasks,
             taskTypeNames,
-            fallbackTaskTypeName,
+            fillerTaskType,
             shared,
             provider,
             log,
@@ -201,6 +195,9 @@ export async function executeRun(
       error: error instanceof Error ? error.message : String(error),
       finishedAt: new Date(),
     });
+  } finally {
+    // Long-lived CLI sessions belong to this run; don't leave them running.
+    provider.close?.();
   }
 }
 
@@ -213,7 +210,7 @@ type SharedContext = {
   events: (typeof schema.clickupEvents.$inferSelect)[];
   styleExamples: (typeof schema.styleExamples.$inferSelect)[];
   rulesMd: string | null;
-  aiModel: string | null;
+  aiModel: string;
 };
 
 async function loadSharedContext(fromYMD: string, toYMD: string): Promise<SharedContext> {
@@ -241,54 +238,52 @@ async function loadSharedContext(fromYMD: string, toYMD: string): Promise<Shared
       .all(),
     styleExamples: db.select().from(schema.styleExamples).all().slice(-20).reverse(),
     rulesMd: getSetting("rules_md"),
-    aiModel: getSetting("ai_model"),
+    aiModel: getSetting("ai_model")?.trim() || DEFAULT_AI_MODEL,
   };
 }
 
 async function fetchRemoteTasks(
   fromYMD: string,
   toYMD: string,
-): Promise<{ remoteTasks: RemoteTask[]; remoteWarning: string | null }> {
-  const jwt = getSetting("jwt");
-  if (!jwt) {
-    return { remoteTasks: [], remoteWarning: "ไม่มีโทเคน workload — ข้ามการเช็คงานที่ส่งไปแล้ว" };
+): Promise<{ remoteTasks: RemoteTaskLike[]; remoteWarning: string | null }> {
+  const account = workloadAccount();
+  if ("missing" in account) {
+    return { remoteTasks: [], remoteWarning: `ไม่มี ${account.missing} — ข้ามการเช็คงานที่ส่งไปแล้ว` };
   }
-  const res = await getMyRange(jwt, fromYMD, toYMD);
-  if (res.authExpired) {
-    return { remoteTasks: [], remoteWarning: "โทเคน workload หมดอายุ — เช็คของที่ส่งไปแล้วไม่ได้" };
+  const res = await fetchRemoteRange(account.jwt, account.identity.userId, fromYMD, toYMD);
+  if (!res.ok) {
+    return {
+      remoteTasks: [],
+      remoteWarning: res.authExpired ? "JWT หมดอายุ — เช็คซ้ำไม่ได้" : `workload API: ${res.error}`,
+    };
   }
-  if (!res.ok) return { remoteTasks: [], remoteWarning: `workload API ตอบ ${res.status}` };
-  return { remoteTasks: res.data, remoteWarning: null };
+  return { remoteTasks: res.tasks, remoteWarning: null };
 }
 
-/**
- * Refresh the site's reference tables when a token is present, then return
- * the type names this user's position may log. The fallback ("Others" on the
- * site) is what filler cards are booked under.
- */
-async function ensureTaskTypes(): Promise<{
-  taskTypeNames: string[];
-  fallbackTaskTypeName: string;
-}> {
-  const jwt = getSetting("jwt");
-  if (jwt) {
-    // Best effort: a failed refresh falls back to the last synced copy.
-    await Promise.all([syncTaskTypes(jwt), syncProjects(jwt)]);
+async function ensureTaskTypes(
+  log: RunLogger,
+): Promise<{ taskTypeNames: string[]; fillerTaskType: string }> {
+  const account = workloadAccount();
+  if (!("missing" in account)) {
+    const res = await syncAllowedTaskTypes(account.jwt);
+    if (!res.ok) log("warn", `ดึงประเภทงานจาก workload ไม่ได้ (${res.error}) — ใช้รายการเดิม`);
   }
-  const allowed = allowedTaskTypes(listTaskTypes(), myPositionIds());
-  if (allowed.length === 0) {
-    throw new Error("ไม่มี task types — ใส่โทเคน workload ใน Settings แล้วดึงประเภทงานก่อน");
+  const types = getDb().select().from(schema.taskTypes).all();
+  if (types.length === 0) {
+    throw new Error("ไม่มี task types — ใส่ workload JWT ใน Settings แล้ว sync ก่อน");
   }
-  const fallback = fallbackTaskType(allowed) ?? allowed[0];
-  return { taskTypeNames: allowed.map((t) => t.name), fallbackTaskTypeName: fallback.name };
+  // Filler cards take the type the site itself falls back to ("Others").
+  const filler = types.find((t) => t.isFallback) ?? types[0];
+  return { taskTypeNames: types.map((t) => t.name), fillerTaskType: filler.name };
 }
 
 async function generateDay(input: {
   runId: number;
   day: ResolvedDayTarget;
-  remoteTasks: RemoteTask[];
+  remoteTasks: RemoteTaskLike[];
   taskTypeNames: string[];
-  fallbackTaskTypeName: string;
+  /** Task type for the deterministic filler cards. */
+  fillerTaskType: string;
   shared: SharedContext;
   provider: AiProvider;
   log: RunLogger;
@@ -415,11 +410,11 @@ async function generateDay(input: {
         topic,
         noteHtml:
           "<p><b>Review / testing</b></p><ul><li>ตรวจสอบและทดสอบงานที่กำลังพัฒนา</li><li>ติดตามงานค้างและแก้ปัญหาย่อย</li></ul>",
-        taskType: input.fallbackTaskTypeName,
+        taskType: input.fillerTaskType,
         origin: "inferred",
         confidence: 0.2,
         evidence: { commits: [], tasks: [] },
-        fingerprint: fingerprintCard(day.date, `${topic}-${filler}`, input.fallbackTaskTypeName),
+        fingerprint: fingerprintCard(day.date, `${topic}-${filler}`, input.fillerTaskType),
         internalNote: "เติมอัตโนมัติให้ครบเป้าชั่วโมง",
         createdAt: now,
         updatedAt: now,
@@ -456,6 +451,8 @@ async function generateValidPlan(
   let transientRetries = 0;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS + MAX_TRANSIENT_RETRIES; attempt++) {
+    // The system part is identical for every day of the run, so the CLI
+    // session reads it from the prompt cache; only `user` is new each day.
     const prompt = buildDayPrompt({
       evidence,
       taskTypeNames: input.taskTypeNames,
@@ -469,9 +466,12 @@ async function generateValidPlan(
     let usage: AiUsage | null = null;
     let callError: string | null = null;
     let isTransient = false;
-    log("info", `${input.day.date}: เรียก AI ครั้งที่ ${attempt} (prompt ${fmtTokens(prompt.length)} ตัวอักษร)`);
+    log("info", `${input.day.date}: เรียก AI ครั้งที่ ${attempt} (prompt ${fmtTokens(prompt.user.length)} ตัวอักษร)`);
     try {
-      const result = await input.provider.generate(prompt, { model: input.shared.aiModel });
+      const result = await input.provider.generate(prompt.user, {
+        model: input.shared.aiModel,
+        system: prompt.system,
+      });
       raw = result.text;
       durationMs = result.durationMs;
       usage = result.usage ?? null;
@@ -479,7 +479,7 @@ async function generateValidPlan(
         input.usages.push(usage);
         log(
           "info",
-          `${input.day.date}: ${usage.model ?? "โมเดลค่าเริ่มต้น"} · ` +
+          `${input.day.date}: ${usage.model ?? input.shared.aiModel} · ` +
             `เข้า ${fmtTokens(usage.inputTokens)} ออก ${fmtTokens(usage.outputTokens)} ` +
             `แคช ${fmtTokens(usage.cacheReadTokens + usage.cacheCreationTokens)} · ` +
             `${(durationMs / 1000).toFixed(1)} วิ` +
@@ -508,10 +508,10 @@ async function generateValidPlan(
         runId: input.runId,
         date: input.day.date,
         attempt,
-        prompt,
+        prompt: `${prompt.system}\n\n----- day message -----\n\n${prompt.user}`,
         rawOutput: raw || null,
         durationMs,
-        model: usage?.model ?? input.shared.aiModel ?? null,
+        model: usage?.model ?? input.shared.aiModel,
         inputTokens: usage?.inputTokens ?? null,
         outputTokens: usage?.outputTokens ?? null,
         cacheReadTokens: usage?.cacheReadTokens ?? null,

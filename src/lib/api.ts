@@ -2,6 +2,8 @@
 
 import type {
   Card,
+  ChatAttachment,
+  ChatMessage,
   Project,
   Run,
   TaskType,
@@ -40,6 +42,8 @@ export type SettingsData = {
   settings: Record<string, string | null>;
   gitAuthors: string[];
   identity: IdentityCheck;
+  /** Owner of the JWT, read from the token itself. */
+  account: { name: string; email: string; role: string } | null;
   jwtExpiresAt: string | null;
   jwtExpired: boolean | null;
 };
@@ -51,20 +55,19 @@ export type GitAuthorsData = {
   warnings: string[];
 };
 
-export type MeData = {
-  account: { id: number; email: string; name: string; role: string; positionIds: number[] };
+export type WorkloadMe = {
+  me: { id: number; name: string; email: string; role: string; positions: { positionId: number; name: string }[] };
   identity: IdentityCheck;
 };
+
+export type ChatThreadData = { threadId: number | null; messages: ChatMessage[] };
 
 export type CardsData = { cards: Card[]; days: ResolvedDayTarget[]; coverage: CoverageReport };
 
 export const api = {
   settings: () => call<SettingsData>("/api/settings"),
   saveSettings: (values: Record<string, string>) =>
-    call<{ saved: string[]; account?: MeData["account"] | null }>("/api/settings", {
-      method: "PUT",
-      body: JSON.stringify({ values }),
-    }),
+    call<{ saved: string[] }>("/api/settings", { method: "PUT", body: JSON.stringify({ values }) }),
 
   projects: () => call<{ projects: Project[] }>("/api/projects"),
   discoverProjects: (root?: string) =>
@@ -90,13 +93,10 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ values: { git_authors: JSON.stringify(authors) } }),
     }),
-  /** Who the stored workload token belongs to (GET /auth/me on the site). */
-  me: () => call<MeData>("/api/me"),
+  me: () => call<WorkloadMe>("/api/me"),
 
   taskTypes: () => call<{ taskTypes: TaskType[] }>("/api/task-types"),
-  /** Refreshes task types and projects from the workload site. */
-  syncTaskTypes: () =>
-    call<{ synced: number; projects: number }>("/api/task-types", { method: "POST" }),
+  syncTaskTypes: () => call<{ synced: number }>("/api/task-types", { method: "POST" }),
 
   cards: (from: string, to: string) => call<CardsData>(`/api/cards?from=${from}&to=${to}`),
   updateCard: (
@@ -136,6 +136,21 @@ export const api = {
       remoteCount: number;
     }>("/api/reconcile", { method: "POST", body: JSON.stringify({ from, to }) }),
 
+  chatThread: (scope: string) =>
+    call<ChatThreadData>(`/api/chat?scope=${encodeURIComponent(scope)}`),
+  /** Waits for the AI — can take a minute. */
+  sendChat: (input: {
+    scope: string;
+    text: string;
+    attachments?: ChatAttachment[];
+    newThread?: boolean;
+  }) => call<ChatThreadData>("/api/chat", { method: "POST", body: JSON.stringify(input) }),
+  proposalAction: (messageId: number, action: "apply" | "discard") =>
+    call<{ applied: number; failed: string[] }>(`/api/chat/proposals/${messageId}`, {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
+
   generate: (input: {
     from: string;
     to: string;
@@ -159,10 +174,9 @@ export const api = {
       body: JSON.stringify({ from, to, ids }),
     }),
   submitPayload: (from: string, to: string) =>
-    call<{
-      payload: { days: { workDate: string; items: unknown[] }[]; skipped: string[] };
-      count: number;
-    }>(`/api/submit?from=${from}&to=${to}`),
+    call<{ payload: { days: unknown[]; skipped: string[] }; count: number }>(
+      `/api/submit?from=${from}&to=${to}`,
+    ),
 
   /** One day (date) or a span (from+to) — leave is usually several days. */
   setDayTarget: (input: {

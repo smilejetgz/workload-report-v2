@@ -15,7 +15,7 @@ const postSchema = z.object({
   refresh: z.boolean().default(false),
 });
 
-/** Prompt preview: build the exact prompt for one day without calling the AI. */
+/** Prompt preview: build the exact prompt (system + day message) for one day without calling the AI. */
 export function POST(request: Request) {
   return handle(async () => {
     const parsed = await parseBody(request, postSchema);
